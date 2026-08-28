@@ -1,0 +1,19 @@
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+/run
+
+/lcsxnmc-server/build.gradle.kts
+/lcsxnmc-server/src/minecraft
+/paper-server
+/lcsxnmc-api/build.gradle.kts
+/paper-api
+/paper-api-generator
+/paper-checkstyle
+/.checkstyle
+/lcsxnmc-checkstyle/build.gradle.kts
+
+.idea/

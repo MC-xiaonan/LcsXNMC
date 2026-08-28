@@ -1,0 +1,50 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
+@@ -1,0 +_,47 @@
++package dev.lcsxnmc.api.plugin;
++
++import java.util.Set;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Lets plugins query which LcsXNMC features are currently enabled on this server.
++ * <p>
++ * A "feature" is any optional behavior LcsXNMC ships that can be toggled through
++ * {@code lcsxnmc.yml}. Plugins should use this instead of guessing server behavior
++ * from version strings.
++ */
++public interface FeatureManager {
++
++    /**
++     * Checks whether the named feature is currently enabled.
++     *
++     * @param key the feature key, e.g. {@code "debug-logging"}
++     * @return true if the feature is enabled
++     */
++    boolean isFeatureEnabled(@NotNull String key);
++
++    /**
++     * Gets the keys of every feature LcsXNMC knows about, regardless of whether
++     * it is currently enabled.
++     *
++     * @return an immutable set of known feature keys
++     */
++    @NotNull
++    Set<String> getKnownFeatures();
++
++    /**
++     * Gets the keys of every feature that is currently enabled.
++     *
++     * @return an immutable set of enabled feature keys
++     */
++    @NotNull
++    Set<String> getEnabledFeatures();
++
++    /**
++     * Gets the LcsXNMC version string, e.g. as reported by {@code /lcsxnmc version}.
++     *
++     * @return the LcsXNMC version string
++     */
++    @NotNull
++    String getLcsXNMCVersion();
++}

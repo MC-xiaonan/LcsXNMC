@@ -1,0 +1,37 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/plugin/Features.java
+@@ -1,0 +_,34 @@
++package dev.lcsxnmc.api.plugin;
++
++import org.bukkit.Bukkit;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Static convenience accessors for {@link FeatureManager}, mirroring the
++ * {@link Bukkit} static-facade pattern.
++ */
++public final class Features {
++
++    private Features() {
++    }
++
++    /**
++     * Gets the server's {@link FeatureManager}.
++     *
++     * @return the feature manager
++     */
++    @NotNull
++    public static FeatureManager manager() {
++        return Bukkit.getServer().getFeatureManager();
++    }
++
++    /**
++     * Checks whether the named feature is currently enabled.
++     *
++     * @param key the feature key
++     * @return true if the feature is enabled
++     */
++    public static boolean isEnabled(@NotNull String key) {
++        return manager().isFeatureEnabled(key);
++    }
++}

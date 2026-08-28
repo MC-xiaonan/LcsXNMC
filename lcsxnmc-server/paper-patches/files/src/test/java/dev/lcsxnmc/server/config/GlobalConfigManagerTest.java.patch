@@ -1,0 +1,97 @@
+--- /dev/null
++++ b/src/test/java/dev/lcsxnmc/server/config/GlobalConfigManagerTest.java
+@@ -1,0 +_,94 @@
++package dev.lcsxnmc.server.config;
++
++import dev.lcsxnmc.server.config.annotation.GlobalConfig;
++import dev.lcsxnmc.server.config.annotation.GlobalConfigCategory;
++import org.bukkit.configuration.file.YamlConfiguration;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++@Normal
++public class GlobalConfigManagerTest {
++
++    public static final class SampleConfig {
++
++        @GlobalConfig("config-version")
++        public static int configVersion = 1;
++
++        @GlobalConfigCategory("features")
++        public static final class FeaturesCategory {
++            @GlobalConfig("debug-logging")
++            public static boolean debugLogging = false;
++
++            @GlobalConfig("worker-threads")
++            public static int workerThreads = 4;
++        }
++
++        public static FeaturesCategory features = new FeaturesCategory();
++    }
++
++    // SampleConfig's fields are static, so GlobalConfigManager (which uses each
++    // field's *current* value as its default) sees whatever the previous test
++    // left behind unless we reset them first.
++    @BeforeEach
++    public void resetSampleConfigToDefaults() {
++        SampleConfig.configVersion = 1;
++        SampleConfig.features.debugLogging = false;
++        SampleConfig.features.workerThreads = 4;
++    }
++
++    @Test
++    public void loadingEmptyYamlWritesBackAnnotationDefaults() {
++        YamlConfiguration yaml = new YamlConfiguration();
++
++        GlobalConfigManager.load(yaml, SampleConfig.class);
++
++        assertEquals(1, SampleConfig.configVersion);
++        assertEquals(false, SampleConfig.features.debugLogging);
++        assertEquals(4, SampleConfig.features.workerThreads);
++
++        assertEquals(1, yaml.getInt("config-version"));
++        assertEquals(false, yaml.getBoolean("features.debug-logging"));
++        assertEquals(4, yaml.getInt("features.worker-threads"));
++    }
++
++    @Test
++    public void loadingPopulatedYamlOverridesFieldsInPlace() {
++        YamlConfiguration yaml = new YamlConfiguration();
++        yaml.set("config-version", 7);
++        yaml.set("features.debug-logging", true);
++        yaml.set("features.worker-threads", 16);
++
++        GlobalConfigManager.load(yaml, SampleConfig.class);
++
++        assertEquals(7, SampleConfig.configVersion);
++        assertTrue(SampleConfig.features.debugLogging);
++        assertEquals(16, SampleConfig.features.workerThreads);
++    }
++
++    @Test
++    public void roundTripThroughSerializedYamlPreservesValues() throws Exception {
++        YamlConfiguration written = new YamlConfiguration();
++        SampleConfig.configVersion = 3;
++        SampleConfig.features.debugLogging = true;
++        SampleConfig.features.workerThreads = 8;
++        GlobalConfigManager.load(written, SampleConfig.class);
++
++        String serialized = written.saveToString();
++
++        SampleConfig.configVersion = 1;
++        SampleConfig.features.debugLogging = false;
++        SampleConfig.features.workerThreads = 4;
++
++        YamlConfiguration reloaded = new YamlConfiguration();
++        reloaded.loadFromString(serialized);
++        GlobalConfigManager.load(reloaded, SampleConfig.class);
++
++        assertEquals(3, SampleConfig.configVersion);
++        assertTrue(SampleConfig.features.debugLogging);
++        assertEquals(8, SampleConfig.features.workerThreads);
++    }
++}

@@ -1,0 +1,42 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+@@ -1,0 +_,39 @@
++package dev.lcsxnmc.server.plugin;
++
++import dev.lcsxnmc.api.plugin.FeatureManager;
++import dev.lcsxnmc.server.LcsXNMCConfig;
++import java.util.Set;
++import java.util.stream.Collectors;
++import org.bukkit.Bukkit;
++import org.jetbrains.annotations.NotNull;
++
++public final class LcsXNMCFeatureManager implements FeatureManager {
++
++    private static final Set<String> KNOWN_FEATURES = Set.of("debug-logging");
++
++    @Override
++    public boolean isFeatureEnabled(@NotNull String key) {
++        return switch (key) {
++            case "debug-logging" -> LcsXNMCConfig.features.debugLogging;
++            default -> false;
++        };
++    }
++
++    @Override
++    @NotNull
++    public Set<String> getKnownFeatures() {
++        return KNOWN_FEATURES;
++    }
++
++    @Override
++    @NotNull
++    public Set<String> getEnabledFeatures() {
++        return KNOWN_FEATURES.stream().filter(this::isFeatureEnabled).collect(Collectors.toUnmodifiableSet());
++    }
++
++    @Override
++    @NotNull
++    public String getLcsXNMCVersion() {
++        return Bukkit.getVersion();
++    }
++}

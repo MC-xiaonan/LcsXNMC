@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 28 Aug 2026 19:34:26 +0800
+Subject: [PATCH] Register dev.lcsxnmc package with the Normal test suite
+
+
+diff --git a/src/test/java/org/bukkit/support/suite/NormalTestSuite.java b/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
+index 625d88420c9f0f0828aae1ff9f22103b44ace76e..d402b13f4f5d1600827eb378ead6fa262afd960e 100644
+--- a/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
++++ b/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
+@@ -9,7 +9,7 @@ import org.junit.platform.suite.api.SuiteDisplayName;
+ @Suite(failIfNoTests = false)
+ @SuiteDisplayName("Test suite for standalone tests, which don't need any registry values present")
+ @IncludeTags("Normal")
+-@SelectPackages({"org.bukkit", "io.papermc.paper", "com.destroystokyo.paper"})
++@SelectPackages({"org.bukkit", "io.papermc.paper", "com.destroystokyo.paper", "dev.lcsxnmc"})
+ @ConfigurationParameter(key = "TestSuite", value = "Normal")
+ public class NormalTestSuite {
+ }

@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 28 Aug 2026 18:24:58 +0800
+Subject: [PATCH] Add LcsXNMC FeatureManager API to Server interface
+
+
+diff --git a/src/main/java/org/bukkit/Server.java b/src/main/java/org/bukkit/Server.java
+index a8e67888e63ae1d387e432827dc96590767b7b7f..aabd1e8a9ac63f845d3a912f9a18d4d6fe14fd6f 100644
+--- a/src/main/java/org/bukkit/Server.java
++++ b/src/main/java/org/bukkit/Server.java
+@@ -2774,4 +2774,15 @@ public interface Server extends PluginMessageRecipient, net.kyori.adventure.audi
+      */
+     void allowPausing(@NotNull org.bukkit.plugin.Plugin plugin, boolean value);
+     // Paper end - API to check if the server is sleeping
++
++    // LcsXNMC start - FeatureManager API
++    /**
++     * Gets the LcsXNMC feature manager, which lets plugins query which
++     * LcsXNMC features are currently enabled on this server.
++     *
++     * @return the LcsXNMC feature manager
++     */
++    @NotNull
++    dev.lcsxnmc.api.plugin.FeatureManager getFeatureManager();
++    // LcsXNMC end
+ }

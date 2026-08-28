@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 28 Aug 2026 18:25:13 +0800
+Subject: [PATCH] Implement LcsXNMC FeatureManager on CraftServer
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 716c3b17dc07eb2417dfb0084fe75dbd270f031a..570bfa73e94fd3b1c16cab1bdc338c0cd2cc2300 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -2961,4 +2961,13 @@ public final class CraftServer implements Server {
+     public void allowPausing(final Plugin plugin, final boolean value) {
+         this.console.addPluginAllowingSleep(plugin.getName(), value);
+     }
++
++    // LcsXNMC start - FeatureManager API
++    private final dev.lcsxnmc.api.plugin.FeatureManager featureManager = new dev.lcsxnmc.server.plugin.LcsXNMCFeatureManager();
++
++    @Override
++    public dev.lcsxnmc.api.plugin.FeatureManager getFeatureManager() {
++        return this.featureManager;
++    }
++    // LcsXNMC end
+ }

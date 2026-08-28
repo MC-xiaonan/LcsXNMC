@@ -1,0 +1,105 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/config/GlobalConfigManager.java
+@@ -1,0 +_,102 @@
++package dev.lcsxnmc.server.config;
++
++import dev.lcsxnmc.server.config.annotation.GlobalConfig;
++import dev.lcsxnmc.server.config.annotation.GlobalConfigCategory;
++import java.lang.reflect.Field;
++import java.lang.reflect.Modifier;
++import org.bukkit.configuration.file.YamlConfiguration;
++
++/**
++ * Reflectively binds {@code static} fields annotated with {@link GlobalConfig}
++ * (and instance fields of {@link GlobalConfigCategory}-annotated nested types)
++ * to a {@link YamlConfiguration}, using each field's current value as the
++ * default.
++ * <p>
++ * This is an original, deliberately minimal implementation: no validators, no
++ * locking, no migration support. It only knows how to round-trip the value
++ * types LcsXNMC's own config classes actually use (primitives, their boxed
++ * forms, and {@link String}).
++ */
++public final class GlobalConfigManager {
++
++    private GlobalConfigManager() {
++    }
++
++    /**
++     * Loads every {@link GlobalConfig} field declared on {@code configRoot}
++     * (and its nested categories) from {@code yaml}, writing back defaults
++     * for anything missing.
++     *
++     * @param yaml       the backing yaml document
++     * @param configRoot the root config class; its {@code static} fields are bound
++     */
++    public static void load(YamlConfiguration yaml, Class<?> configRoot) {
++        bindFields(yaml, configRoot, null, "");
++    }
++
++    private static void bindFields(YamlConfiguration yaml, Class<?> type, Object instance, String pathPrefix) {
++        for (Field field : type.getDeclaredFields()) {
++            if (field.isSynthetic() || (instance == null && !Modifier.isStatic(field.getModifiers()))) {
++                continue;
++            }
++
++            field.setAccessible(true);
++
++            GlobalConfig config = field.getAnnotation(GlobalConfig.class);
++            if (config != null) {
++                bindValue(yaml, field, instance, pathPrefix + config.value());
++                continue;
++            }
++
++            GlobalConfigCategory category = field.getType().getAnnotation(GlobalConfigCategory.class);
++            if (category != null) {
++                bindCategory(yaml, field, instance, pathPrefix + category.value() + ".");
++            }
++        }
++    }
++
++    private static void bindCategory(YamlConfiguration yaml, Field field, Object instance, String pathPrefix) {
++        try {
++            Object categoryInstance = field.get(instance);
++            if (categoryInstance == null) {
++                categoryInstance = field.getType().getDeclaredConstructor().newInstance();
++                field.set(instance, categoryInstance);
++            }
++            bindFields(yaml, field.getType(), categoryInstance, pathPrefix);
++        } catch (ReflectiveOperationException e) {
++            throw new IllegalStateException("Failed to initialize LcsXNMC config category " + field.getType().getName(), e);
++        }
++    }
++
++    private static void bindValue(YamlConfiguration yaml, Field field, Object instance, String path) {
++        try {
++            Object defaultValue = field.get(instance);
++            Object value = coerce(field.getType(), yaml.get(path, defaultValue), defaultValue);
++            field.set(instance, value);
++            // Write back so a freshly generated lcsxnmc.yml documents every known key,
++            // not just ones a server owner has already overridden.
++            yaml.set(path, value);
++        } catch (IllegalAccessException e) {
++            throw new IllegalStateException("Failed to bind LcsXNMC config field " + field, e);
++        }
++    }
++
++    private static Object coerce(Class<?> type, Object value, Object defaultValue) {
++        if (value == null) {
++            return defaultValue;
++        }
++        if ((type == int.class || type == Integer.class) && value instanceof Number number) {
++            return number.intValue();
++        }
++        if ((type == long.class || type == Long.class) && value instanceof Number number) {
++            return number.longValue();
++        }
++        if ((type == double.class || type == Double.class) && value instanceof Number number) {
++            return number.doubleValue();
++        }
++        if ((type == float.class || type == Float.class) && value instanceof Number number) {
++            return number.floatValue();
++        }
++        return value;
++    }
++}

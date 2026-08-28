@@ -1,0 +1,28 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/config/annotation/GlobalConfig.java
+@@ -1,0 +_,25 @@
++package dev.lcsxnmc.server.config.annotation;
++
++import java.lang.annotation.ElementType;
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++import java.lang.annotation.Target;
++
++/**
++ * Marks a static field as a value backed by {@code lcsxnmc.yml}. The field's
++ * current value is used as the default; {@link GlobalConfigManager} reads and
++ * writes the field in place.
++ *
++ * @see GlobalConfigCategory
++ * @see GlobalConfigManager
++ */
++@Target(ElementType.FIELD)
++@Retention(RetentionPolicy.RUNTIME)
++public @interface GlobalConfig {
++
++    /**
++     * The config path segment for this field, relative to its enclosing
++     * category (or the config root if not nested).
++     */
++    String value();
++}

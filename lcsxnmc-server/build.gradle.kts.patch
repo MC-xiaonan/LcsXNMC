@@ -1,12 +1,12 @@
 --- a/paper-server/build.gradle.kts
 +++ b/paper-server/build.gradle.kts
 @@ -20,8 +_,21 @@
-
+ 
  paperweight {
      minecraftVersion = providers.gradleProperty("mcVersion")
 +    filterPatches = false
      gitFilePatches = false
-
+ 
 +    val fork = forks.register("lcsxnmc") {
 +        upstream.patchDir("paperServer") {
 +            upstreamPath = "paper-server"
@@ -25,7 +25,7 @@
 @@ -86,7 +_,19 @@
      }
  }
-
+ 
 -val log4jPlugins = sourceSets.create("log4jPlugins")
 +sourceSets {
 +    main {
@@ -45,7 +45,7 @@
  }
 @@ -109,7 +_,7 @@
  }
-
+ 
  dependencies {
 -    implementation(project(":paper-api"))
 +    implementation(project(":lcsxnmc-api"))
@@ -74,7 +74,7 @@
 @@ -246,7 +_,7 @@
      jvmArgumentProviders.add(provider)
  }
-
+ 
 -val generatedDir: java.nio.file.Path = layout.projectDirectory.dir("src/generated/java").asFile.toPath()
 +val generatedDir: java.nio.file.Path = layout.projectDirectory.dir("../paper-server/src/generated/java").asFile.toPath()
  idea {
@@ -82,10 +82,10 @@
          generatedSourceDirs.add(generatedDir.toFile())
 @@ -327,7 +_,7 @@
  }
-
+ 
  fill {
 -    project("paper")
 +    project("lcsxnmc")
      versionFamily(paperweight.minecraftVersion.map { it.split(".", "-").takeWhile { part -> part.toIntOrNull() != null }.take(2).joinToString(".") })
      version(paperweight.minecraftVersion)
-
+ 

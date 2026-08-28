@@ -1,7 +1,7 @@
 --- a/paper-api/build.gradle.kts
 +++ b/paper-api/build.gradle.kts
 @@ -19,7 +_,11 @@
-
+ 
  paperCheckstyle {
      customJavadocTags = projectCustomJavadocTags
 -    directoriesToSkipFile = layout.projectDirectory.file(".checkstyle/ignored_directories.txt")
@@ -11,16 +11,16 @@
 +tasks.named<io.papermc.paperweight.checkstyle.tasks.MergeCheckstyleConfigs>("mergeCheckstyleConfigs") {
 +    overrideConfigFile.set(layout.projectDirectory.file("../paper-api/.checkstyle/checkstyle.xml"))
  }
-
+ 
  val annotationsVersion = "26.0.2"
 @@ -105,10 +_,10 @@
      testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.0.3")
-
+ 
      // checkstyle
 -    checkstyle(project(":paper-checkstyle"))
 +    checkstyle(project(":lcsxnmc-checkstyle"))
  }
-
+ 
 -val generatedDir: java.nio.file.Path = layout.projectDirectory.dir("src/generated/java").asFile.toPath()
 +val generatedDir: java.nio.file.Path = rootProject.layout.projectDirectory.dir("paper-api/src/generated/java").asFile.toPath()
  idea {
@@ -46,7 +46,7 @@
      }
  }
 @@ -200,7 +_,7 @@
-
+ 
  tasks.withType<Javadoc>().configureEach {
      val options = options as StandardJavadocDocletOptions
 -    options.overview = "src/main/javadoc/overview.html"
@@ -56,7 +56,7 @@
      options.links(
 @@ -227,11 +_,11 @@
      }
-
+ 
      // workaround for https://github.com/gradle/gradle/issues/4046
 -    inputs.dir("src/main/javadoc").withPropertyName("javadoc-sourceset")
 +    inputs.dir("../paper-api/src/main/javadoc").withPropertyName("javadoc-sourceset")

@@ -1,9 +1,9 @@
 --- a/paper-checkstyle/build.gradle.kts
 +++ b/paper-checkstyle/build.gradle.kts
 @@ -5,6 +_,23 @@
-
+ 
  val testData = sourceSets.create("testData")
-
+ 
 +tasks.named<io.papermc.paperweight.checkstyle.tasks.MergeCheckstyleConfigs>("mergeCheckstyleConfigs") {
 +    overrideConfigFile.set(layout.projectDirectory.file("../paper-checkstyle/.checkstyle/checkstyle.xml"))
 +}
@@ -27,11 +27,11 @@
 @@ -16,11 +_,12 @@
      testRuntimeOnly("org.junit.platform:junit-platform-launcher")
      testData.implementationConfigurationName("org.jspecify:jspecify:1.0.0")
-
+ 
 -    checkstyle(project(":paper-checkstyle"))
 +    checkstyle(project(":lcsxnmc-checkstyle"))
  }
-
+ 
  tasks {
      test {
 +        workingDir = file("../paper-checkstyle")

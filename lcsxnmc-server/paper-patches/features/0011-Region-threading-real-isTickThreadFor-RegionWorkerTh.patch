@@ -1,0 +1,480 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 19:09:24 +0800
+Subject: [PATCH] Region threading: real isTickThreadFor, RegionWorkerThread,
+ cross-region moveEntity handoff
+
+
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/util/RegionWorkerThread.java b/src/main/java/ca/spottedleaf/moonrise/common/util/RegionWorkerThread.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..251ff3c82bff79eb35967112d6ec53a5a70f3e33
+--- /dev/null
++++ b/src/main/java/ca/spottedleaf/moonrise/common/util/RegionWorkerThread.java
+@@ -0,0 +1,40 @@
++// LcsXNMC start - region threading
++package ca.spottedleaf.moonrise.common.util;
++
++import net.minecraft.world.level.Level;
++
++/**
++ * A tick thread that owns exactly one {@link TickRegion} at a time, as opposed to the single
++ * global tick thread which owns everything not claimed by a real region. Nothing spawns this
++ * thread yet (Phase 4.4a step 6 introduces the worker lifecycle) - it exists now so that
++ * {@link TickThread#isTickThreadFor} and the entity lookup's cross-region handoff protocol
++ * have a real type to check against, verified today by direct construction in unit tests
++ * rather than a running server.
++ */
++public final class RegionWorkerThread extends TickThread {
++
++    public final Level level;
++
++    private volatile TickRegion currentRegion;
++
++    public RegionWorkerThread(final ThreadGroup group, final Runnable run, final Level level, final long regionId) {
++        super(group, run, "Region Worker - " + WorldUtil.getWorldName(level) + " - " + regionId, false);
++        this.level = level;
++    }
++
++    /**
++     * The region this thread currently owns. Only ever written by this thread itself (from
++     * within its own tick loop); reads from other threads are for diagnostics only.
++     */
++    public TickRegion getCurrentRegion() {
++        return this.currentRegion;
++    }
++
++    /**
++     * Must only be called by this thread itself.
++     */
++    public void setCurrentRegion(final TickRegion region) {
++        this.currentRegion = region;
++    }
++}
++// LcsXNMC end - region threading
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/util/TickRegion.java b/src/main/java/ca/spottedleaf/moonrise/common/util/TickRegion.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e85dc475ef295171218049e8e8bdd304818d4850
+--- /dev/null
++++ b/src/main/java/ca/spottedleaf/moonrise/common/util/TickRegion.java
+@@ -0,0 +1,54 @@
++// LcsXNMC start - region threading
++package ca.spottedleaf.moonrise.common.util;
++
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
++import net.minecraft.world.level.Level;
++
++/**
++ * A single region's ownership snapshot for the duration of one tick: which world it belongs
++ * to and exactly which chunk columns it currently owns. Instances are frozen for the duration
++ * of a tick - region topology only ever changes at the reclustering barrier between ticks
++ * (Phase 4.4a step 6), never while a {@link RegionWorkerThread} is mid-tick.
++ *
++ * <p>Nothing constructs a real instance of this class yet (Phase 4.4a step 4): no code path
++ * ever creates a {@link RegionWorkerThread} in production, so every {@code TickThread.isTickThreadFor}
++ * check resolves exactly as it did before this class existed.</p>
++ */
++public final class TickRegion {
++
++    private final long regionId;
++    private final Level world;
++    private final LongOpenHashSet ownedChunks;
++
++    // step 6 (RegionizedWorldData/tick loop integration) populates and drains these; step 4 only
++    // needs a real place for a future TickRegion.tick() to keep them, unwired and untouched today
++    private final net.minecraft.world.level.entity.EntityTickList entityTickList = new net.minecraft.world.level.entity.EntityTickList();
++    private final io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList entitySchedulerTickList = new io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList();
++
++    public TickRegion(final long regionId, final Level world, final LongOpenHashSet ownedChunks) {
++        this.regionId = regionId;
++        this.world = world;
++        this.ownedChunks = ownedChunks;
++    }
++
++    public long getRegionId() {
++        return this.regionId;
++    }
++
++    public Level getWorld() {
++        return this.world;
++    }
++
++    public boolean ownsChunk(final int chunkX, final int chunkZ) {
++        return this.ownedChunks.contains(CoordinateUtils.getChunkKey(chunkX, chunkZ));
++    }
++
++    public net.minecraft.world.level.entity.EntityTickList getEntityTickList() {
++        return this.entityTickList;
++    }
++
++    public io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList getEntitySchedulerTickList() {
++        return this.entitySchedulerTickList;
++    }
++}
++// LcsXNMC end - region threading
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+index 8f84666e03298cc7a83058c14687c9d80cfea6bb..afa5e7fade0701ac316f0d8d80fe44e46767f7ce 100644
+--- a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
++++ b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+@@ -1,6 +1,7 @@
+ package ca.spottedleaf.moonrise.common.util;
+ 
+ import net.minecraft.core.BlockPos;
++import net.minecraft.util.Mth;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+@@ -159,46 +160,130 @@ public class TickThread extends Thread {
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final BlockPos pos) {
+-        return isTickThread();
++        return isTickThreadFor(world, pos.getX() >> 4, pos.getZ() >> 4);
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final BlockPos pos, final int blockRadius) {
+-        return isTickThread();
++        return isTickThreadForBlockRange(
++            world, pos.getX() - blockRadius, pos.getZ() - blockRadius, pos.getX() + blockRadius, pos.getZ() + blockRadius
++        );
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final ChunkPos pos) {
+-        return isTickThread();
++        return isTickThreadFor(world, pos.x(), pos.z());
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final Vec3 pos) {
+-        return isTickThread();
++        return isTickThreadFor(world, Mth.floor(pos.x) >> 4, Mth.floor(pos.z) >> 4);
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int chunkX, final int chunkZ) {
+-        return isTickThread();
++        return isTickThreadForChunkRange(world, chunkX, chunkZ, chunkX, chunkZ);
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final AABB aabb) {
+-        return isTickThread();
++        return isTickThreadForBlockRange(
++            world, Mth.floor(aabb.minX), Mth.floor(aabb.minZ), Mth.floor(aabb.maxX), Mth.floor(aabb.maxZ)
++        );
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final double blockX, final double blockZ) {
+-        return isTickThread();
++        return isTickThreadFor(world, Mth.floor(blockX) >> 4, Mth.floor(blockZ) >> 4);
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final Vec3 position, final Vec3 deltaMovement, final int buffer) {
+-        return isTickThread();
++        final Vec3 to = position.add(deltaMovement);
++        final double minX = Math.min(position.x, to.x) - buffer;
++        final double minZ = Math.min(position.z, to.z) - buffer;
++        final double maxX = Math.max(position.x, to.x) + buffer;
++        final double maxZ = Math.max(position.z, to.z) + buffer;
++        return isTickThreadForBlockRange(world, Mth.floor(minX), Mth.floor(minZ), Mth.floor(maxX), Mth.floor(maxZ));
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ) {
+-        return isTickThread();
++        return isTickThreadForChunkRange(
++            world, Math.min(fromChunkX, toChunkX), Math.min(fromChunkZ, toChunkZ), Math.max(fromChunkX, toChunkX), Math.max(fromChunkZ, toChunkZ)
++        );
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int chunkX, final int chunkZ, final int radius) {
+-        return isTickThread();
++        return isTickThreadForChunkRange(world, chunkX - radius, chunkZ - radius, chunkX + radius, chunkZ + radius);
+     }
+ 
+     public static boolean isTickThreadFor(final Entity entity) {
+-        return isTickThread();
++        return isTickThreadForRegion(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getTickRegion());
+     }
++
++    /**
++     * Split out of {@link #isTickThreadFor(Entity)} so the entity-cache-snapshot logic can be
++     * unit tested directly against a bare {@link TickRegion}, without constructing a real
++     * {@link Entity} (which needs a running server). Consults only the given cached snapshot -
++     * never recomputes ownership from the entity's current position - so the result stays
++     * consistent with whatever the two-phase handoff protocol last wrote to it, even if the
++     * caller is mid-handoff on another region.
++     */
++    public static boolean isTickThreadForRegion(final TickRegion entityRegion) {
++        final Thread current = Thread.currentThread();
++        if (current instanceof RegionWorkerThread worker) {
++            final TickRegion workerRegion = worker.getCurrentRegion();
++            return workerRegion != null && workerRegion == entityRegion;
++        }
++        if (isGlobalTickThread(current)) {
++            // the entity's cached region snapshot is null ("global region") unless it has been
++            // claimed by a real TickRegion - which never happens yet, see TickRegion's javadoc
++            return entityRegion == null;
++        }
++        return false;
++    }
++
++    // LcsXNMC start - region threading: shared range-check helpers
++    private static boolean isTickThreadForBlockRange(final Level world, final int minBlockX, final int minBlockZ, final int maxBlockX, final int maxBlockZ) {
++        return isTickThreadForChunkRange(world, minBlockX >> 4, minBlockZ >> 4, maxBlockX >> 4, maxBlockZ >> 4);
++    }
++
++    /**
++     * Checks that the current thread owns every chunk in the given (inclusive) chunk range,
++     * not just the range's center - a partial range check would silently allow an operation
++     * to overrun a region boundary.
++     */
++    private static boolean isTickThreadForChunkRange(final Level world, final int minChunkX, final int minChunkZ, final int maxChunkX, final int maxChunkZ) {
++        final Thread current = Thread.currentThread();
++        if (current instanceof RegionWorkerThread worker) {
++            final TickRegion region = worker.getCurrentRegion();
++            if (region == null || region.getWorld() != world) {
++                return false;
++            }
++            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
++                for (int chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
++                    if (!region.ownsChunk(chunkX, chunkZ)) {
++                        return false;
++                    }
++                }
++            }
++            return true;
++        }
++        if (isGlobalTickThread(current)) {
++            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
++                for (int chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
++                    if (isClaimedByRealRegion(world, chunkX, chunkZ)) {
++                        return false;
++                    }
++                }
++            }
++            return true;
++        }
++        return false;
++    }
++
++    /**
++     * Whether the given chunk is currently owned by a real {@link TickRegion}. Hardcoded to
++     * {@code false} for the whole of Phase 4.4a step 4: nothing ever assigns a chunk to a
++     * region yet - that is {@code RegionizedWorldData}, landing in step 6. Until then every
++     * chunk in every world is, by definition, unclaimed, so the global tick thread owns
++     * everything, exactly as {@link #isTickThread()} always resolved before this method existed.
++     */
++    private static boolean isClaimedByRealRegion(final Level world, final int chunkX, final int chunkZ) {
++        return false;
++    }
++    // LcsXNMC end - region threading
+ }
+diff --git a/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java b/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..abd72e3d11638ba45c61a17709c64501b2fe39e0
+--- /dev/null
++++ b/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java
+@@ -0,0 +1,194 @@
++package ca.spottedleaf.moonrise.common.util;
++
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
++import net.minecraft.world.level.Level;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.Test;
++import org.mockito.Mockito;
++
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++/**
++ * Truth-table coverage for the real (non-stub) {@link TickThread#isTickThreadFor} logic and its
++ * {@link RegionWorkerThread}/{@link TickRegion} building blocks, per Phase 4.4a step 4.
++ * {@code region-threading.enabled} stays false in production for this whole step - nothing here
++ * exercises a running server, only directly-constructed threads and regions, exactly as the plan
++ * calls for ("不需要真实 ServerLevel 启动").
++ */
++@Normal
++public class TickThreadRegionTest {
++
++    private static TickRegion regionOf(final long id, final Level world, final long... chunkKeys) {
++        final LongOpenHashSet chunks = new LongOpenHashSet(chunkKeys);
++        return new TickRegion(id, world, chunks);
++    }
++
++    private static void runAndPropagate(final Thread thread) throws InterruptedException {
++        thread.start();
++        thread.join();
++    }
++
++    private interface ThrowingRunnable {
++        void run() throws Throwable;
++    }
++
++    private static Runnable capturing(final ThrowingRunnable body, final Throwable[] failureHolder) {
++        return () -> {
++            try {
++                body.run();
++            } catch (final Throwable t) {
++                failureHolder[0] = t;
++            }
++        };
++    }
++
++    private static void assertNoFailure(final Throwable[] failureHolder) {
++        if (failureHolder[0] != null) {
++            throw new AssertionError(failureHolder[0]);
++        }
++    }
++
++    @Test
++    public void mainThreadOwnsGlobalRegionChunks() throws InterruptedException {
++        final Throwable[] failure = new Throwable[1];
++        final Thread thread = new TickThread(capturing(() -> {
++            // no real region has ever been created, so the global tick thread owns every chunk
++            assertTrue(TickThread.isTickThreadFor((Level) null, 0, 0));
++            assertTrue(TickThread.isTickThreadFor((Level) null, -500, 999));
++            assertTrue(TickThread.isGlobalTickThread());
++        }, failure), "test-global-thread");
++
++        runAndPropagate(thread);
++        assertNoFailure(failure);
++    }
++
++    @Test
++    public void regionWorkerDoesNotOwnAnotherRegionsChunks() throws InterruptedException {
++        final Throwable[] failure = new Throwable[1];
++        final TickRegion region = regionOf(1L, null, CoordinateUtils.getChunkKey(0, 0), CoordinateUtils.getChunkKey(1, 0));
++        final RegionWorkerThread[] workerHolder = new RegionWorkerThread[1];
++
++        final RegionWorkerThread worker = new RegionWorkerThread(null, capturing(() -> {
++            workerHolder[0].setCurrentRegion(region);
++
++            assertTrue(TickThread.isTickThreadFor((Level) null, 0, 0));
++            assertTrue(TickThread.isTickThreadFor((Level) null, 1, 0));
++            // not in this region's owned set
++            assertFalse(TickThread.isTickThreadFor((Level) null, 5, 5));
++            // never the global thread
++            assertFalse(TickThread.isGlobalTickThread());
++        }, failure), null, 1L);
++        workerHolder[0] = worker;
++
++        runAndPropagate(worker);
++        assertNoFailure(failure);
++    }
++
++    @Test
++    public void regionWorkerChunkCheckFailsAcrossDifferentWorlds() throws InterruptedException {
++        final Level worldA = fakeLevel();
++        final Level worldB = fakeLevel();
++        final Throwable[] failure = new Throwable[1];
++        final TickRegion region = regionOf(2L, worldA, CoordinateUtils.getChunkKey(0, 0));
++        final RegionWorkerThread[] workerHolder = new RegionWorkerThread[1];
++
++        final RegionWorkerThread worker = new RegionWorkerThread(null, capturing(() -> {
++            workerHolder[0].setCurrentRegion(region);
++
++            assertTrue(TickThread.isTickThreadFor(worldA, 0, 0));
++            assertFalse(TickThread.isTickThreadFor(worldB, 0, 0));
++        }, failure), worldA, 2L);
++        workerHolder[0] = worker;
++
++        runAndPropagate(worker);
++        assertNoFailure(failure);
++    }
++
++    @Test
++    public void radiusCheckFailsIfAnySingleChunkInRadiusIsUnowned() throws InterruptedException {
++        final Throwable[] failure = new Throwable[1];
++        // owns the full 3x3 square around (0,0) except (1,1) - a naive center-only check would
++        // still see the center chunk as owned and wrongly report ownership of the whole radius
++        final LongOpenHashSet owned = new LongOpenHashSet();
++        for (int x = -1; x <= 1; x++) {
++            for (int z = -1; z <= 1; z++) {
++                if (x == 1 && z == 1) {
++                    continue;
++                }
++                owned.add(CoordinateUtils.getChunkKey(x, z));
++            }
++        }
++        final TickRegion region = new TickRegion(3L, null, owned);
++        final RegionWorkerThread[] workerHolder = new RegionWorkerThread[1];
++
++        final RegionWorkerThread worker = new RegionWorkerThread(null, capturing(() -> {
++            workerHolder[0].setCurrentRegion(region);
++
++            // center chunk alone is owned...
++            assertTrue(TickThread.isTickThreadFor((Level) null, 0, 0));
++            // ...but the full radius is not, because (1,1) is missing
++            assertFalse(TickThread.isTickThreadFor((Level) null, 0, 0, 1));
++            // same for the equivalent fromChunk/toChunk range overload
++            assertFalse(TickThread.isTickThreadFor((Level) null, -1, -1, 1, 1));
++            // a range that excludes the missing chunk still succeeds
++            assertTrue(TickThread.isTickThreadFor((Level) null, -1, -1, 0, 0));
++        }, failure), null, 3L);
++        workerHolder[0] = worker;
++
++        runAndPropagate(worker);
++        assertNoFailure(failure);
++    }
++
++    @Test
++    public void globalThreadRadiusCheckIsNeverClaimedByARealRegionYet() throws InterruptedException {
++        final Throwable[] failure = new Throwable[1];
++        final Thread thread = new TickThread(capturing(() -> {
++            // isClaimedByRealRegion() is hardcoded false for the whole of step 4, so every
++            // radius/AABB range still resolves true on the global thread, same as the old stub
++            assertTrue(TickThread.isTickThreadFor((Level) null, 0, 0, 50));
++        }, failure), "test-global-thread-radius");
++
++        runAndPropagate(thread);
++        assertNoFailure(failure);
++    }
++
++    @Test
++    public void entityOverloadUsesCachedRegionSnapshotNotLiveRecompute() throws InterruptedException {
++        final Throwable[] failure = new Throwable[1];
++        final TickRegion regionA = regionOf(4L, null, CoordinateUtils.getChunkKey(0, 0));
++        // regionB owns the exact same chunks as regionA - if the check were a live recompute of
++        // "does my worker's owned-chunk-set match", it would wrongly treat A and B as
++        // interchangeable; the cached-snapshot check must instead be a strict identity match
++        final TickRegion regionB = regionOf(5L, null, CoordinateUtils.getChunkKey(0, 0));
++        final RegionWorkerThread[] workerHolder = new RegionWorkerThread[1];
++
++        final RegionWorkerThread worker = new RegionWorkerThread(null, capturing(() -> {
++            workerHolder[0].setCurrentRegion(regionA);
++
++            assertTrue(TickThread.isTickThreadForRegion(regionA));
++            assertFalse(TickThread.isTickThreadForRegion(regionB));
++            assertFalse(TickThread.isTickThreadForRegion(null));
++        }, failure), null, 4L);
++        workerHolder[0] = worker;
++
++        runAndPropagate(worker);
++        assertNoFailure(failure);
++
++        final Throwable[] globalFailure = new Throwable[1];
++        final Thread globalThread = new TickThread(capturing(() -> {
++            // on the global thread, only the null ("global region") snapshot matches
++            assertTrue(TickThread.isTickThreadForRegion(null));
++            assertFalse(TickThread.isTickThreadForRegion(regionA));
++        }, globalFailure), "test-global-thread-entity");
++
++        runAndPropagate(globalThread);
++        assertNoFailure(globalFailure);
++    }
++
++    private static Level fakeLevel() {
++        // identity is all that matters here - isTickThreadFor only ever compares world
++        // references with ==, it never dereferences the Level itself for these checks
++        return Mockito.mock(Level.class);
++    }
++}
+diff --git a/src/test/java/org/bukkit/support/suite/NormalTestSuite.java b/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
+index d402b13f4f5d1600827eb378ead6fa262afd960e..509aa3b32213cf52b456a635e50b58e6eb5a7318 100644
+--- a/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
++++ b/src/test/java/org/bukkit/support/suite/NormalTestSuite.java
+@@ -9,7 +9,7 @@ import org.junit.platform.suite.api.SuiteDisplayName;
+ @Suite(failIfNoTests = false)
+ @SuiteDisplayName("Test suite for standalone tests, which don't need any registry values present")
+ @IncludeTags("Normal")
+-@SelectPackages({"org.bukkit", "io.papermc.paper", "com.destroystokyo.paper", "dev.lcsxnmc"})
++@SelectPackages({"org.bukkit", "io.papermc.paper", "com.destroystokyo.paper", "dev.lcsxnmc", "ca.spottedleaf"})
+ @ConfigurationParameter(key = "TestSuite", value = "Normal")
+ public class NormalTestSuite {
+ }

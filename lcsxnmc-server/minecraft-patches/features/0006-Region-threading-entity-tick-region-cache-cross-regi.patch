@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 19:09:36 +0800
+Subject: [PATCH] Region threading: entity tick-region cache, cross-region
+ moveEntity two-phase handoff
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/entity/ChunkSystemEntity.java b/ca/spottedleaf/moonrise/patches/chunk_system/entity/ChunkSystemEntity.java
+index c351a80c5c47f3f5148dec93219e1a7ee22e9056..0fa4ab22c9df0bbc5e0bd2baad962ebe479380ca 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/entity/ChunkSystemEntity.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/entity/ChunkSystemEntity.java
+@@ -42,4 +42,12 @@ public interface ChunkSystemEntity {
+     public void moonrise$setUpdatingSectionStatus(final boolean to);
+ 
+     public boolean moonrise$hasAnyPlayerPassengers();
++
++    // LcsXNMC start - region threading: cached region snapshot, refreshed only at the two-phase
++    // handoff's batch update point (see EntityLookup#moveEntity), never live-recomputed - null
++    // means "the global region" (unclaimed by any real TickRegion)
++    public ca.spottedleaf.moonrise.common.util.TickRegion moonrise$getTickRegion();
++
++    public void moonrise$setTickRegion(final ca.spottedleaf.moonrise.common.util.TickRegion region);
++    // LcsXNMC end - region threading
+ }
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+index 328784ba08236553e49d62320b79f7222292412f..3782c58aa70021f6498f148b2d00ba9e372556bd 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+@@ -89,6 +89,23 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+ 
+     protected abstract boolean screenEntity(final Entity entity, final boolean fromDisk, final boolean event);
+ 
++    // LcsXNMC start - region threading: two-phase cross-region entity handoff
++    /**
++     * Whether moving to the given chunk section falls outside the region the calling thread
++     * currently owns, and therefore must go through the two-phase handoff protocol below
++     * instead of a synchronous slice swap.
++     */
++    protected abstract boolean isCrossRegionMove(final int newSectionX, final int newSectionZ);
++
++    /**
++     * Enqueues an entity that has already been removed from its old chunk section for pickup
++     * by the region that owns the given new chunk section. The entity becomes visible in its
++     * new section only once that region drains its arrival queue on its own thread, at the
++     * start of its next tick - never synchronously from the calling thread.
++     */
++    protected abstract void enqueueCrossRegionArrival(final Entity entity, final int newSectionX, final int newSectionY, final int newSectionZ);
++    // LcsXNMC end - region threading
++
+     private static Entity maskNonAccessible(final Entity entity) {
+         if (entity == null) {
+             return null;
+@@ -534,12 +551,37 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+             return null;
+         }
+ 
+-        // ensure the new section is owned by this tick thread
+-        this.checkThread(newSectionX, newSectionZ, "Cannot move entity off-main");
+-
+         // ensure the old section is owned by this tick thread
+         this.checkThread(sectionX, sectionZ, "Cannot move entity off-main");
+ 
++        // LcsXNMC start - region threading: two-phase cross-region handoff
++        if (this.isCrossRegionMove(newSectionX, newSectionZ)) {
++            final ChunkEntitySlices old = this.getChunk(sectionX, sectionZ);
++
++            if (!old.removeEntity(entity, sectionY)) {
++                LOGGER.warn("Could not remove entity " + entity + " from its old chunk section (" + sectionX + "," + sectionY + "," + sectionZ + ") since it was not contained in the section");
++            }
++
++            ((ChunkSystemEntity)entity).moonrise$setSectionX(newSectionX);
++            ((ChunkSystemEntity)entity).moonrise$setSectionY(newSectionY);
++            ((ChunkSystemEntity)entity).moonrise$setSectionZ(newSectionZ);
++
++            if (old.isEmpty()) {
++                this.onEmptySlices(sectionX, sectionZ);
++            }
++
++            // the calling thread does not own the destination chunk and must not touch its
++            // ChunkEntitySlices - addEntity + entitySectionChangeCallback happen on the target
++            // region's own thread when it drains its arrival queue
++            this.enqueueCrossRegionArrival(entity, newSectionX, newSectionY, newSectionZ);
++
++            return null;
++        }
++        // LcsXNMC end - region threading
++
++        // ensure the new section is owned by this tick thread
++        this.checkThread(newSectionX, newSectionZ, "Cannot move entity off-main");
++
+         final ChunkEntitySlices old = this.getChunk(sectionX, sectionZ);
+         final ChunkEntitySlices slices = this.getOrCreateChunk(newSectionX, newSectionZ);
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/client/ClientEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/client/ClientEntityLookup.java
+index cf929c61d244e3408a7f9cfc0914d140a6c444db..c5583ce9078e836fef252c4f00e5e9be89133b9d 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/client/ClientEntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/client/ClientEntityLookup.java
+@@ -106,6 +106,18 @@ public final class ClientEntityLookup extends EntityLookup {
+         return true;
+     }
+ 
++    // LcsXNMC start - region threading: the client has no region concept, so a move is never cross-region here
++    @Override
++    protected boolean isCrossRegionMove(final int newSectionX, final int newSectionZ) {
++        return false;
++    }
++
++    @Override
++    protected void enqueueCrossRegionArrival(final Entity entity, final int newSectionX, final int newSectionY, final int newSectionZ) {
++        throw new UnsupportedOperationException("Cross-region entity handoff is not supported for ClientEntityLookup");
++    }
++    // LcsXNMC end - region threading
++
+     public void markTicking(final long pos) {
+         if (this.tickingChunks.add(pos)) {
+             final int chunkX = CoordinateUtils.getChunkX(pos);
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/dfl/DefaultEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/dfl/DefaultEntityLookup.java
+index 2ff58cf753c60913ee73aae015182e9c5560d529..5ea4ac30e754f47eeb47aaf30f489450652994f0 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/dfl/DefaultEntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/dfl/DefaultEntityLookup.java
+@@ -88,6 +88,19 @@ public final class DefaultEntityLookup extends EntityLookup {
+         return true;
+     }
+ 
++    // LcsXNMC start - region threading: no region concept off the main server (e.g. datapack/plugin
++    // standalone level usage), so a move is never cross-region here
++    @Override
++    protected boolean isCrossRegionMove(final int newSectionX, final int newSectionZ) {
++        return false;
++    }
++
++    @Override
++    protected void enqueueCrossRegionArrival(final Entity entity, final int newSectionX, final int newSectionY, final int newSectionZ) {
++        throw new UnsupportedOperationException("Cross-region entity handoff is not supported for DefaultEntityLookup");
++    }
++    // LcsXNMC end - region threading
++
+     protected static final class DefaultLevelCallback implements LevelCallback<Entity> {
+ 
+         @Override
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+index 706f529a7d1064aad128b1ee8c82f6319daa8d01..304feabea773245ae3ecd0803e07441d611c1153 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+@@ -130,6 +130,28 @@ public final class ServerEntityLookup extends EntityLookup {
+         return PlatformHooks.get().screenEntity(this.serverWorld, entity, fromDisk, event);
+     }
+ 
++    // LcsXNMC start - region threading: two-phase cross-region entity handoff
++    @Override
++    protected boolean isCrossRegionMove(final int newSectionX, final int newSectionZ) {
++        final Thread current = Thread.currentThread();
++        if (!(current instanceof ca.spottedleaf.moonrise.common.util.RegionWorkerThread worker)) {
++            // the global tick thread owns every chunk not claimed by a real region (none are
++            // claimed yet - Phase 4.4a step 6), so it never needs the handoff protocol
++            return false;
++        }
++        final ca.spottedleaf.moonrise.common.util.TickRegion region = worker.getCurrentRegion();
++        return region == null || region.getWorld() != this.serverWorld || !region.ownsChunk(newSectionX, newSectionZ);
++    }
++
++    @Override
++    protected void enqueueCrossRegionArrival(final Entity entity, final int newSectionX, final int newSectionY, final int newSectionZ) {
++        // Unreachable in production today: isCrossRegionMove() above can only return true from a
++        // RegionWorkerThread, and nothing ever spawns one yet (Phase 4.4a step 6 introduces
++        // RegionizedWorldData, which resolves the target region and its arrival queue).
++        throw new UnsupportedOperationException("Cross-region entity handoff is not wired up until RegionizedWorldData exists (Phase 4.4a step 6)");
++    }
++    // LcsXNMC end - region threading
++
+     private void addEnderPearl(final long coordinate) {
+         if (!this.keepEnderPearlsTicking) {
+             return;
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index d958c4717739e588c5f8985dec5d215c745f49fc..b6b7ae7153be6cfaf39e928a33bac2190264074d 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -481,6 +481,19 @@ public abstract class Entity
+         return this.getIndirectPassengersStream().anyMatch((entity) -> entity instanceof Player);
+     }
+     // Paper end - rewrite chunk system
++    // LcsXNMC start - region threading: cached region snapshot
++    private ca.spottedleaf.moonrise.common.util.TickRegion tickRegion;
++
++    @Override
++    public final ca.spottedleaf.moonrise.common.util.TickRegion moonrise$getTickRegion() {
++        return this.tickRegion;
++    }
++
++    @Override
++    public final void moonrise$setTickRegion(final ca.spottedleaf.moonrise.common.util.TickRegion region) {
++        this.tickRegion = region;
++    }
++    // LcsXNMC end - region threading
+     // Paper start - optimise collisions
+     private static float[] calculateStepHeights(final AABB box, final List<VoxelShape> voxels, final List<AABB> aabbs, final float stepHeight,
+                                                 final float collidedY) {

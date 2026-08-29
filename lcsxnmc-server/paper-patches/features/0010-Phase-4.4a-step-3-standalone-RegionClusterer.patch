@@ -1,0 +1,438 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 18:29:29 +0800
+Subject: [PATCH] Phase 4.4a step 3: standalone RegionClusterer
+
+Union-find clustering of online players by Chebyshev chunk distance into
+square-footprint regions, with sticky region ids reused via greedy
+overlap matching against the previous tick's regions (ties broken by the
+smaller old region id). Not wired into any tick path yet - pure logic,
+verified by RegionClustererTest (11 cases, all passing under
+:lcsxnmc-server:test's NormalTestSuite).
+
+diff --git a/src/main/java/dev/lcsxnmc/server/regionizer/RegionClusterer.java b/src/main/java/dev/lcsxnmc/server/regionizer/RegionClusterer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..594b9ef3f5e19c4b3e6ac3532ff12c27b2198a97
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/regionizer/RegionClusterer.java
+@@ -0,0 +1,201 @@
++package dev.lcsxnmc.server.regionizer;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.UUID;
++
++/**
++ * Clusters online players into connected "regions" by chunk-distance
++ * union-find, then assigns each cluster a {@code regionId} - reusing an
++ * existing id when the new cluster's chunk set overlaps a previous region's
++ * chunk set enough (sticky ids, so a region's worker thread doesn't get torn
++ * down and rebuilt every reclustering tick just because a player nudged
++ * across a boundary).
++ * <p>
++ * Deliberately narrow: this only decides which players share a worker thread
++ * and which chunks that worker owns. It does not flood-fill through loaded
++ * chunks, does not know about worlds, threads, or entities, and does not
++ * compute the "global" region - the caller derives that separately as "every
++ * loaded chunk minus every returned region's chunks".
++ */
++public final class RegionClusterer {
++
++    public record PlayerAnchor(UUID playerId, int chunkX, int chunkZ) {
++    }
++
++    public record Region(long regionId, Set<UUID> members, Set<Long> chunks) {
++    }
++
++    @FunctionalInterface
++    public interface RegionIdAllocator {
++        long nextId();
++    }
++
++    private final int minRegionRadiusChunks;
++    private final int mergeDistanceChunks;
++    private final double stickyOverlapThreshold;
++
++    public RegionClusterer(final int minRegionRadiusChunks, final int mergeDistanceChunks, final double stickyOverlapThreshold) {
++        if (minRegionRadiusChunks < 0) {
++            throw new IllegalArgumentException("minRegionRadiusChunks must not be negative");
++        }
++        if (mergeDistanceChunks < 0) {
++            throw new IllegalArgumentException("mergeDistanceChunks must not be negative");
++        }
++        this.minRegionRadiusChunks = minRegionRadiusChunks;
++        this.mergeDistanceChunks = mergeDistanceChunks;
++        this.stickyOverlapThreshold = stickyOverlapThreshold;
++    }
++
++    public static long chunkKey(final int chunkX, final int chunkZ) {
++        return (chunkX & 0xFFFFFFFFL) | ((chunkZ & 0xFFFFFFFFL) << 32);
++    }
++
++    /**
++     * @param players         currently online players to cluster; order determines
++     *                        tie-breaking and (together with {@code idAllocator}) is what
++     *                        makes the result reproducible for the same inputs
++     * @param previousRegions the previous tick's regions, used only to decide which
++     *                        new cluster (if any) inherits which old region's id
++     * @param idAllocator     supplies a fresh id for every new cluster that doesn't
++     *                        inherit one
++     */
++    public List<Region> cluster(final List<PlayerAnchor> players, final List<Region> previousRegions, final RegionIdAllocator idAllocator) {
++        if (players.isEmpty()) {
++            return List.of();
++        }
++
++        final int mergeThreshold = 2 * this.minRegionRadiusChunks + this.mergeDistanceChunks;
++        final UnionFind unionFind = new UnionFind(players.size());
++        for (int i = 0; i < players.size(); i++) {
++            final PlayerAnchor a = players.get(i);
++            for (int j = i + 1; j < players.size(); j++) {
++                final PlayerAnchor b = players.get(j);
++                final int dx = Math.abs(a.chunkX() - b.chunkX());
++                final int dz = Math.abs(a.chunkZ() - b.chunkZ());
++                if (Math.max(dx, dz) <= mergeThreshold) {
++                    unionFind.union(i, j);
++                }
++            }
++        }
++
++        // LinkedHashMap: iteration order must follow first-seen player order so that
++        // cluster order (and therefore idAllocator.nextId() call order) is reproducible.
++        final Map<Integer, List<PlayerAnchor>> componentsByRoot = new LinkedHashMap<>();
++        for (int i = 0; i < players.size(); i++) {
++            componentsByRoot.computeIfAbsent(unionFind.find(i), root -> new ArrayList<>()).add(players.get(i));
++        }
++
++        final List<UnassignedCluster> clusters = new ArrayList<>(componentsByRoot.size());
++        for (final List<PlayerAnchor> members : componentsByRoot.values()) {
++            final Set<Long> chunks = new HashSet<>();
++            final Set<UUID> memberIds = new HashSet<>();
++            for (final PlayerAnchor anchor : members) {
++                memberIds.add(anchor.playerId());
++                for (int cx = anchor.chunkX() - this.minRegionRadiusChunks; cx <= anchor.chunkX() + this.minRegionRadiusChunks; cx++) {
++                    for (int cz = anchor.chunkZ() - this.minRegionRadiusChunks; cz <= anchor.chunkZ() + this.minRegionRadiusChunks; cz++) {
++                        chunks.add(chunkKey(cx, cz));
++                    }
++                }
++            }
++            clusters.add(new UnassignedCluster(memberIds, chunks));
++        }
++
++        return assignStickyIds(clusters, previousRegions, idAllocator);
++    }
++
++    private record UnassignedCluster(Set<UUID> members, Set<Long> chunks) {
++    }
++
++    private record Candidate(int clusterIndex, Region oldRegion, double overlap) {
++    }
++
++    private List<Region> assignStickyIds(final List<UnassignedCluster> clusters, final List<Region> previousRegions, final RegionIdAllocator idAllocator) {
++        final List<Candidate> candidates = new ArrayList<>();
++        for (int i = 0; i < clusters.size(); i++) {
++            final Set<Long> newChunks = clusters.get(i).chunks();
++            for (final Region old : previousRegions) {
++                if (old.chunks().isEmpty()) {
++                    continue;
++                }
++                int intersectionSize = 0;
++                for (final long chunk : old.chunks()) {
++                    if (newChunks.contains(chunk)) {
++                        intersectionSize++;
++                    }
++                }
++                final double overlap = (double) intersectionSize / old.chunks().size();
++                if (overlap >= this.stickyOverlapThreshold) {
++                    candidates.add(new Candidate(i, old, overlap));
++                }
++            }
++        }
++
++        // Highest overlap first; ties broken by the smaller old region id so a merge of two
++        // stale regions deterministically keeps the older/lower id rather than an arbitrary one.
++        candidates.sort((a, b) -> {
++            final int overlapCompare = Double.compare(b.overlap(), a.overlap());
++            if (overlapCompare != 0) {
++                return overlapCompare;
++            }
++            return Long.compare(a.oldRegion().regionId(), b.oldRegion().regionId());
++        });
++
++        final Long[] assignedId = new Long[clusters.size()];
++        final Set<Long> claimedOldRegionIds = new HashSet<>();
++        for (final Candidate candidate : candidates) {
++            if (assignedId[candidate.clusterIndex()] != null) {
++                continue; // this cluster already inherited an id from a higher-overlap match
++            }
++            if (!claimedOldRegionIds.add(candidate.oldRegion().regionId())) {
++                continue; // this old region's id was already claimed by a higher-overlap cluster
++            }
++            assignedId[candidate.clusterIndex()] = candidate.oldRegion().regionId();
++        }
++
++        final List<Region> result = new ArrayList<>(clusters.size());
++        for (int i = 0; i < clusters.size(); i++) {
++            final long regionId = assignedId[i] != null ? assignedId[i] : idAllocator.nextId();
++            final UnassignedCluster cluster = clusters.get(i);
++            result.add(new Region(regionId, Set.copyOf(cluster.members()), Set.copyOf(cluster.chunks())));
++        }
++        return result;
++    }
++
++    private static final class UnionFind {
++        private final int[] parent;
++
++        UnionFind(final int size) {
++            this.parent = new int[size];
++            for (int i = 0; i < size; i++) {
++                this.parent[i] = i;
++            }
++        }
++
++        int find(final int x) {
++            int root = x;
++            while (this.parent[root] != root) {
++                root = this.parent[root];
++            }
++            int current = x;
++            while (this.parent[current] != root) {
++                final int next = this.parent[current];
++                this.parent[current] = root;
++                current = next;
++            }
++            return root;
++        }
++
++        void union(final int a, final int b) {
++            final int rootA = find(a);
++            final int rootB = find(b);
++            if (rootA != rootB) {
++                this.parent[rootA] = rootB;
++            }
++        }
++    }
++}
+diff --git a/src/test/java/dev/lcsxnmc/server/regionizer/RegionClustererTest.java b/src/test/java/dev/lcsxnmc/server/regionizer/RegionClustererTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..895ae863e393d2e4de6697e1040191d1257977b7
+--- /dev/null
++++ b/src/test/java/dev/lcsxnmc/server/regionizer/RegionClustererTest.java
+@@ -0,0 +1,213 @@
++package dev.lcsxnmc.server.regionizer;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++import java.util.UUID;
++import java.util.concurrent.atomic.AtomicLong;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++@Normal
++public class RegionClustererTest {
++
++    private static final UUID PLAYER_A = UUID.fromString("00000000-0000-0000-0000-00000000000a");
++    private static final UUID PLAYER_B = UUID.fromString("00000000-0000-0000-0000-00000000000b");
++
++    private static RegionClusterer.RegionIdAllocator sequentialAllocator() {
++        final AtomicLong next = new AtomicLong(1);
++        return next::getAndIncrement;
++    }
++
++    @Test
++    public void singlePlayerProducesASingleRegionCoveringItsRadius() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        final List<RegionClusterer.PlayerAnchor> players = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0));
++
++        final List<RegionClusterer.Region> regions = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        assertEquals(1, regions.size());
++        assertEquals(Set.of(PLAYER_A), regions.get(0).members());
++    }
++
++    @Test
++    public void singlePlayersChunkSetExactlyMatchesExpectedSquareFootprint() {
++        final int radius = 8;
++        final RegionClusterer clusterer = new RegionClusterer(radius, 4, 0.5);
++        final List<RegionClusterer.PlayerAnchor> players = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 10, -5));
++
++        final List<RegionClusterer.Region> regions = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        final Set<Long> expected = new HashSet<>();
++        for (int cx = 10 - radius; cx <= 10 + radius; cx++) {
++            for (int cz = -5 - radius; cz <= -5 + radius; cz++) {
++                expected.add(RegionClusterer.chunkKey(cx, cz));
++            }
++        }
++        assertEquals((2 * radius + 1) * (2 * radius + 1), expected.size());
++        assertEquals(expected, regions.get(0).chunks());
++    }
++
++    @Test
++    public void twoFarApartPlayersProduceTwoIndependentRegions() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        final List<RegionClusterer.PlayerAnchor> players = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 1000, 1000)
++        );
++
++        final List<RegionClusterer.Region> regions = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        assertEquals(2, regions.size());
++        assertNotEquals(regions.get(0).regionId(), regions.get(1).regionId());
++    }
++
++    @Test
++    public void twoNearbyPlayersMergeIntoOneRegion() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        // merge threshold = 2*8+4 = 20; 10 chunks apart is well within range
++        final List<RegionClusterer.PlayerAnchor> players = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 10, 0)
++        );
++
++        final List<RegionClusterer.Region> regions = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        assertEquals(1, regions.size());
++        assertEquals(Set.of(PLAYER_A, PLAYER_B), regions.get(0).members());
++    }
++
++    @Test
++    public void emptyPlayerListProducesNoRegions() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++
++        final List<RegionClusterer.Region> regions = clusterer.cluster(List.of(), List.of(), sequentialAllocator());
++
++        assertTrue(regions.isEmpty());
++    }
++
++    @Test
++    public void stickyIdIsReusedWhenOverlapMeetsThreshold() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        final List<RegionClusterer.PlayerAnchor> firstTick = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0));
++        final List<RegionClusterer.Region> firstRegions = clusterer.cluster(firstTick, List.of(), sequentialAllocator());
++        final long originalId = firstRegions.get(0).regionId();
++
++        // Small nudge: still overlaps the old footprint well above the 0.5 threshold.
++        final List<RegionClusterer.PlayerAnchor> secondTick = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 2, 0));
++        final List<RegionClusterer.Region> secondRegions = clusterer.cluster(secondTick, firstRegions, sequentialAllocator());
++
++        assertEquals(1, secondRegions.size());
++        assertEquals(originalId, secondRegions.get(0).regionId());
++    }
++
++    @Test
++    public void stickyIdIsNotReusedWhenOverlapIsBelowThreshold() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        // One shared allocator across both ticks: a fresh sequentialAllocator() per call would
++        // coincidentally restart from the same id and mask a real "no match found" bug as a false pass.
++        final RegionClusterer.RegionIdAllocator allocator = sequentialAllocator();
++        final List<RegionClusterer.PlayerAnchor> firstTick = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0));
++        final List<RegionClusterer.Region> firstRegions = clusterer.cluster(firstTick, List.of(), allocator);
++        final long originalId = firstRegions.get(0).regionId();
++
++        // Teleported far away: zero overlap with the old footprint.
++        final List<RegionClusterer.PlayerAnchor> secondTick = List.of(new RegionClusterer.PlayerAnchor(PLAYER_A, 5000, 5000));
++        final List<RegionClusterer.Region> secondRegions = clusterer.cluster(secondTick, firstRegions, allocator);
++
++        assertEquals(1, secondRegions.size());
++        assertNotEquals(originalId, secondRegions.get(0).regionId());
++    }
++
++    @Test
++    public void splittingPlayersCausesExactlyOneSubRegionToInheritTheStickyId() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        // One shared allocator across both ticks - see stickyIdIsNotReusedWhenOverlapIsBelowThreshold.
++        final RegionClusterer.RegionIdAllocator allocator = sequentialAllocator();
++        final List<RegionClusterer.PlayerAnchor> together = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 5, 0)
++        );
++        final List<RegionClusterer.Region> mergedRegions = clusterer.cluster(together, List.of(), allocator);
++        assertEquals(1, mergedRegions.size());
++        final long mergedId = mergedRegions.get(0).regionId();
++
++        // A stays put (high overlap with the old merged footprint); B teleports far away (zero overlap).
++        final List<RegionClusterer.PlayerAnchor> apart = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 5000, 5000)
++        );
++        final List<RegionClusterer.Region> splitRegions = clusterer.cluster(apart, mergedRegions, allocator);
++
++        assertEquals(2, splitRegions.size());
++        final long inheritedCount = splitRegions.stream().filter(r -> r.regionId() == mergedId).count();
++        assertEquals(1, inheritedCount, "exactly one split-off region must inherit the sticky id");
++        final RegionClusterer.Region regionForA = splitRegions.stream().filter(r -> r.members().contains(PLAYER_A)).findFirst().orElseThrow();
++        assertEquals(mergedId, regionForA.regionId(), "the player who stayed put should keep the sticky id");
++    }
++
++    @Test
++    public void convergingPlayersMergeAndTieBreakToTheSmallerOldRegionId() {
++        // A low sticky-overlap threshold (0.1) lets both old regions' modest, exactly-equal overlap
++        // with the merged footprint qualify as candidates below, so the tie-break rule actually fires
++        // instead of one candidate being filtered out for falling short of the threshold.
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.1);
++
++        // Symmetric around x=0 and far enough apart (distance 30 > merge threshold 20) to stay separate.
++        final List<RegionClusterer.PlayerAnchor> apart = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, -15, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 15, 0)
++        );
++        final List<RegionClusterer.Region> separateRegions = clusterer.cluster(apart, List.of(), sequentialAllocator());
++        assertEquals(2, separateRegions.size());
++        final long smallerId = Math.min(separateRegions.get(0).regionId(), separateRegions.get(1).regionId());
++
++        // Both players converge symmetrically around x=0 (distance 4 <= merge threshold 20): by the
++        // mirror symmetry of the setup, the merged footprint overlaps old A's and old B's footprints
++        // by the exact same fraction (4/17 each) - a genuine tie, not an approximation.
++        final List<RegionClusterer.PlayerAnchor> together = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, -2, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 2, 0)
++        );
++        final List<RegionClusterer.Region> mergedRegions = clusterer.cluster(together, separateRegions, sequentialAllocator());
++
++        assertEquals(1, mergedRegions.size());
++        assertEquals(smallerId, mergedRegions.get(0).regionId());
++    }
++
++    @Test
++    public void clusteringIsDeterministicForTheSameInputsAndAllocator() {
++        final RegionClusterer clusterer = new RegionClusterer(8, 4, 0.5);
++        final List<RegionClusterer.PlayerAnchor> players = List.of(
++            new RegionClusterer.PlayerAnchor(PLAYER_A, 0, 0),
++            new RegionClusterer.PlayerAnchor(PLAYER_B, 500, 500)
++        );
++
++        final List<RegionClusterer.Region> first = clusterer.cluster(players, List.of(), sequentialAllocator());
++        final List<RegionClusterer.Region> second = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        assertEquals(first, second);
++    }
++
++    @Test
++    public void manyPlayersClusterConsistentlyAcrossRepeatedRuns() {
++        final RegionClusterer clusterer = new RegionClusterer(4, 2, 0.5);
++        final List<RegionClusterer.PlayerAnchor> players = new ArrayList<>();
++        for (int i = 0; i < 20; i++) {
++            players.add(new RegionClusterer.PlayerAnchor(UUID.randomUUID(), (i % 5) * 100, (i / 5) * 100));
++        }
++
++        final List<RegionClusterer.Region> first = clusterer.cluster(players, List.of(), sequentialAllocator());
++        final List<RegionClusterer.Region> second = clusterer.cluster(players, List.of(), sequentialAllocator());
++
++        assertEquals(first, second);
++        // Every player must belong to exactly one region.
++        final long totalMembers = first.stream().mapToLong(r -> r.members().size()).sum();
++        assertEquals(players.size(), totalMembers);
++    }
++}

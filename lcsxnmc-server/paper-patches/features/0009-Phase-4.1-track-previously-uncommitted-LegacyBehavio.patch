@@ -1,6 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 18:29:20 +0800
+Subject: [PATCH] Phase 4.1: track previously-uncommitted LegacyBehaviorSupport
+ + feature manager test
+
+These were written in an earlier session but never staged, so they were
+carried forward untracked instead of being captured by rb.sh's patch
+regeneration through git history.
+
+diff --git a/src/main/java/dev/lcsxnmc/server/plugin/LegacyBehaviorSupport.java b/src/main/java/dev/lcsxnmc/server/plugin/LegacyBehaviorSupport.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..1835045a8dc1029623de2a7c611b32d6622eb14d
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LegacyBehaviorSupport.java
+@@ -0,0 +1,32 @@
++package dev.lcsxnmc.server.plugin;
++
++import dev.lcsxnmc.api.legacy.LegacyBehaviorEvent;
++import java.util.Map;
++import org.bukkit.Bukkit;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Engine-side helper for firing {@link LegacyBehaviorEvent}. Future patches
++ * that reintroduce a specific removed/changed vanilla behavior call
++ * {@link #fire(String, Map)} at the point in question and gate the actual
++ * behavior change on the returned event's {@code isCancelled()}, mirroring
++ * the {@code // Paper start - Restore ...} idiom already used throughout this
++ * project.
++ * <p>
++ * No concrete behavior keys are wired in yet: this class is the generic
++ * mechanism the "26.2 removed features" repair-plugin story depends on, not
++ * a specific restoration. Mount points get added here (via new call sites,
++ * not new methods) as concrete removed behaviors are identified.
++ */
++public final class LegacyBehaviorSupport {
++
++    private LegacyBehaviorSupport() {
++    }
++
++    @NotNull
++    public static LegacyBehaviorEvent fire(@NotNull String key, @NotNull Map<String, Object> context) {
++        LegacyBehaviorEvent event = new LegacyBehaviorEvent(key, context);
++        Bukkit.getPluginManager().callEvent(event);
++        return event;
++    }
++}
+diff --git a/src/test/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManagerTest.java b/src/test/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManagerTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..dc362cc74d756e6b76b00f3879a43dd9dfeae078
 --- /dev/null
 +++ b/src/test/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManagerTest.java
-@@ -1,0 +_,124 @@
+@@ -0,0 +1,124 @@
 +package dev.lcsxnmc.server.plugin;
 +
 +import dev.lcsxnmc.api.legacy.LegacyBehaviorEvent;

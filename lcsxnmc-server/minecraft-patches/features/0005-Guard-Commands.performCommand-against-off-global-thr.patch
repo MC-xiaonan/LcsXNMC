@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 18:42:49 +0800
+Subject: [PATCH] Guard Commands.performCommand against off-global-thread
+ invocation
+
+AsyncCatcher.catchOp only rejects non-tick-thread callers (bare
+isTickThread(), true for any tick thread). Command execution has
+unbounded cross-region side effects and no region ownership of its
+own, so once region worker threads exist it must stay pinned to the
+single global tick thread. Add an explicit isGlobalTickThread()
+check. No RegionWorkerThread exists yet, so this is zero behavior
+change today.
+
+diff --git a/net/minecraft/commands/Commands.java b/net/minecraft/commands/Commands.java
+index c4396509584011a5bbc171510478e8e62ce44d94..e14723a0260b6818717ec18159f204c27eeba584 100644
+--- a/net/minecraft/commands/Commands.java
++++ b/net/minecraft/commands/Commands.java
+@@ -368,6 +368,16 @@ public class Commands {
+ 
+     public void performCommand(final ParseResults<CommandSourceStack> command, final String commandString, final boolean throwCommandError) {
+         org.spigotmc.AsyncCatcher.catchOp("Cannot perform command async");
++        // LcsXNMC start - region threading: command execution can have unbounded cross-region side
++        // effects (e.g. /tp, /kill @e) and has no region ownership of its own, so it must stay pinned
++        // to the single global tick thread even once region worker threads exist. AsyncCatcher.catchOp()
++        // above only rejects non-tick-thread callers (it uses the bare, over-permissive isTickThread()
++        // check shared by call sites that *do* want to allow any region worker), so it alone would not
++        // catch a region worker (e.g. one ticking a command block) calling in here directly.
++        if (!ca.spottedleaf.moonrise.common.util.TickThread.isGlobalTickThread()) {
++            throw new IllegalStateException("Cannot perform command \"" + commandString + "\" off the global tick thread");
++        }
++        // LcsXNMC end - region threading
+         // Paper end
+         CommandSourceStack sender = command.getContext().getSource();
+         Profiler.get().push(() -> "/" + commandString);

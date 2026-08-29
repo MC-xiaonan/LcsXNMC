@@ -1,0 +1,92 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorEvent.java
+@@ -1,0 +_,89 @@
++package dev.lcsxnmc.api.legacy;
++
++import java.util.Collections;
++import java.util.Map;
++import org.bukkit.event.Cancellable;
++import org.bukkit.event.Event;
++import org.bukkit.event.HandlerList;
++import org.jetbrains.annotations.NotNull;
++import org.jetbrains.annotations.Nullable;
++
++/**
++ * Fired at a stable engine point where LcsXNMC's target Minecraft version
++ * changed or removed vanilla behavior. A "repair plugin" registers a normal
++ * {@code @EventHandler} listener for this event and calls
++ * {@link #setCancelled(boolean)} to signal "restore the legacy behavior
++ * instead" - the same convention Paper's own "Restore" patches already use
++ * for plugin-cancellable behavior gates.
++ * <p>
++ * A {@link LegacyBehaviorProvider} registered through
++ * {@link dev.lcsxnmc.api.plugin.FeatureManager#registerProvider(LegacyBehaviorProvider)}
++ * is a separate, optional capability declaration used for discovery (e.g.
++ * {@code /lcsxnmc legacy}); it does not participate in dispatching this event.
++ */
++public final class LegacyBehaviorEvent extends Event implements Cancellable {
++
++    private static final HandlerList HANDLERS = new HandlerList();
++
++    private final String key;
++    private final Map<String, Object> context;
++    private boolean cancelled;
++
++    public LegacyBehaviorEvent(@NotNull String key, @NotNull Map<String, Object> context) {
++        this.key = key;
++        this.context = Collections.unmodifiableMap(context);
++    }
++
++    /**
++     * The behavior key identifying which removed/changed vanilla behavior this
++     * event is asking about, e.g. {@code "item.example-legacy-stacking"}.
++     *
++     * @return the behavior key
++     */
++    @NotNull
++    public String getKey() {
++        return this.key;
++    }
++
++    /**
++     * Immutable context data describing the situation the behavior fired in
++     * (e.g. the block position, the item stack involved). Keys and value types
++     * are documented per behavior key, not by this event itself.
++     *
++     * @return the context map
++     */
++    @NotNull
++    public Map<String, Object> getContext() {
++        return this.context;
++    }
++
++    @Nullable
++    public Object getContext(@NotNull String contextKey) {
++        return this.context.get(contextKey);
++    }
++
++    @Override
++    public boolean isCancelled() {
++        return this.cancelled;
++    }
++
++    /**
++     * Cancelling this event means "restore the legacy behavior for this
++     * occurrence" - engine code checks {@link #isCancelled()} after firing.
++     */
++    @Override
++    public void setCancelled(boolean cancel) {
++        this.cancelled = cancel;
++    }
++
++    @NotNull
++    @Override
++    public HandlerList getHandlers() {
++        return HANDLERS;
++    }
++
++    @NotNull
++    public static HandlerList getHandlerList() {
++        return HANDLERS;
++    }
++}

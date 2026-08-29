@@ -1,0 +1,63 @@
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorProvider.java
+@@ -1,0 +_,60 @@
++package dev.lcsxnmc.api.legacy;
++
++import java.util.Set;
++import org.jetbrains.annotations.NotNull;
++import org.jetbrains.annotations.Nullable;
++
++/**
++ * A self-declared "repair plugin" capability descriptor: a statement of which
++ * {@link LegacyBehaviorEvent} keys a plugin restores, registered through
++ * {@link dev.lcsxnmc.api.plugin.FeatureManager#registerProvider(LegacyBehaviorProvider)}
++ * so server owners can discover what is installed (e.g. via
++ * {@code /lcsxnmc legacy}).
++ * <p>
++ * Registering a provider is purely for discoverability - it does not by
++ * itself do anything. Actually restoring a behavior still requires a normal
++ * {@code @EventHandler} listener on {@link LegacyBehaviorEvent} that calls
++ * {@code event.setCancelled(true)} for the keys it handles.
++ */
++public interface LegacyBehaviorProvider {
++
++    /**
++     * A short, stable, human-readable identifier for this provider, e.g.
++     * {@code "acme-legacy-fixes"}. Used as the config-section key when a
++     * provider supplies {@link #getConfigSection()}.
++     *
++     * @return the provider id
++     */
++    @NotNull
++    String getId();
++
++    /**
++     * A one-line description shown by {@code /lcsxnmc legacy}.
++     *
++     * @return the description
++     */
++    @NotNull
++    String getDescription();
++
++    /**
++     * The {@link LegacyBehaviorEvent#getKey()} values this provider restores.
++     *
++     * @return an immutable set of supported behavior keys
++     */
++    @NotNull
++    Set<String> getSupportedKeys();
++
++    /**
++     * An optional plain object this provider wants bound into
++     * {@code lcsxnmc.yml} under its own section (keyed by {@link #getId()}),
++     * using the same reflective {@code @GlobalConfig}-field binder LcsXNMC's
++     * own config uses. Returns {@code null} if the provider manages its own
++     * configuration instead.
++     *
++     * @return the config section instance, or null
++     */
++    @Nullable
++    default Object getConfigSection() {
++        return null;
++    }
++}

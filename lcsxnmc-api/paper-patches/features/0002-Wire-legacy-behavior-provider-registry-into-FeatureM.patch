@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 15:44:07 +0800
+Subject: [PATCH] Wire legacy behavior provider registry into FeatureManager
+
+
+diff --git a/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java b/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
+index 1c622f13817e52cde879b18bacaef0fc7364f2a2..8f19ef7bde34c50337c3ad805cab76f9d09cb9d4 100644
+--- a/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
+@@ -1,5 +1,6 @@
+ package dev.lcsxnmc.api.plugin;
+ 
++import dev.lcsxnmc.api.legacy.LegacyBehaviorProvider;
+ import java.util.Set;
+ import org.jetbrains.annotations.NotNull;
+ 
+@@ -44,4 +45,28 @@ public interface FeatureManager {
+      */
+     @NotNull
+     String getLcsXNMCVersion();
++
++    /**
++     * Registers a "repair plugin" capability descriptor. Idempotent: registering
++     * the same provider twice has no additional effect.
++     *
++     * @param provider the provider to register
++     */
++    void registerProvider(@NotNull LegacyBehaviorProvider provider);
++
++    /**
++     * Unregisters a previously-registered provider. Does nothing if it was
++     * never registered.
++     *
++     * @param provider the provider to unregister
++     */
++    void unregisterProvider(@NotNull LegacyBehaviorProvider provider);
++
++    /**
++     * Gets every currently-registered {@link LegacyBehaviorProvider}.
++     *
++     * @return an immutable view of the registered providers
++     */
++    @NotNull
++    Set<LegacyBehaviorProvider> getRegisteredProviders();
+ }
+\ No newline at end of file

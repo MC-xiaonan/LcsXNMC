@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 15:45:44 +0800
+Subject: [PATCH] Phase 4.1 legacy behavior provider framework: registry,
+ command, config binding
+
+
+diff --git a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+index 9017af47f7e26aa649c988bec4f04d5a4e235041..514fb22c63d6ddd4a36749bdb0f87b943eb71d6a 100644
+--- a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
++++ b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+@@ -149,6 +149,23 @@ public final class LcsXNMCConfig {
+         dev.lcsxnmc.server.runtime.LcsXNMCComputeExecutors.reload();
+     }
+ 
++    /**
++     * Binds a plugin-supplied {@code @GlobalConfigCategory} instance into
++     * {@code lcsxnmc.yml} under {@code pathPrefix}, reusing the same reflective
++     * binder as this class's own fields. A no-op if the config hasn't been
++     * loaded yet (e.g. a provider registers before {@link #init(File)} runs).
++     *
++     * @param instance   the config section instance to bind
++     * @param pathPrefix the yaml path prefix to bind it under
++     */
++    public static void bindExtra(Object instance, String pathPrefix) {
++        if (config == null) {
++            return;
++        }
++        GlobalConfigManager.bindInstance(config, instance, pathPrefix);
++        save();
++    }
++
+     private static void save() {
+         try {
+             config.save(configFile);
+diff --git a/src/main/java/dev/lcsxnmc/server/command/LcsXNMCCommand.java b/src/main/java/dev/lcsxnmc/server/command/LcsXNMCCommand.java
+index d4450b0fbbcddb3846f9b282895a7ad2f06ad397..3090dbaca6ac5cf5e514a3351ef2c31d8e307c66 100644
+--- a/src/main/java/dev/lcsxnmc/server/command/LcsXNMCCommand.java
++++ b/src/main/java/dev/lcsxnmc/server/command/LcsXNMCCommand.java
+@@ -16,7 +16,7 @@ import org.bukkit.permissions.PermissionDefault;
+ public final class LcsXNMCCommand extends Command {
+ 
+     private static final String PERMISSION = "lcsxnmc.command";
+-    private static final List<String> SUBCOMMANDS = List.of("version", "features", "reload");
++    private static final List<String> SUBCOMMANDS = List.of("version", "features", "reload", "legacy");
+ 
+     public LcsXNMCCommand(final String name) {
+         super(name);
+@@ -36,6 +36,7 @@ public final class LcsXNMCCommand extends Command {
+         switch (sub) {
+             case "version" -> sender.sendMessage("This server is running " + Bukkit.getServer().getFeatureManager().getLcsXNMCVersion());
+             case "features" -> this.sendFeatures(sender);
++            case "legacy" -> this.sendLegacyProviders(sender);
+             case "reload" -> {
+                 LcsXNMCConfig.reload();
+                 sender.sendMessage("LcsXNMC configuration reloaded.");
+@@ -56,6 +57,18 @@ public final class LcsXNMCCommand extends Command {
+         }
+     }
+ 
++    private void sendLegacyProviders(final CommandSender sender) {
++        final var providers = Bukkit.getServer().getFeatureManager().getRegisteredProviders();
++        if (providers.isEmpty()) {
++            sender.sendMessage("No legacy behavior providers are registered.");
++            return;
++        }
++        for (final var provider : providers) {
++            sender.sendMessage(provider.getId() + " - " + provider.getDescription()
++                + " [" + String.join(", ", provider.getSupportedKeys()) + "]");
++        }
++    }
++
+     @Override
+     public List<String> tabComplete(final CommandSender sender, final String alias, final String[] args) {
+         if (args.length <= 1) {
+diff --git a/src/main/java/dev/lcsxnmc/server/config/GlobalConfigManager.java b/src/main/java/dev/lcsxnmc/server/config/GlobalConfigManager.java
+index 80a7035787bfeff99cd03ea71e17e3c7df747ce6..9dd96adcacec44811b4881b9c682525e89599939 100644
+--- a/src/main/java/dev/lcsxnmc/server/config/GlobalConfigManager.java
++++ b/src/main/java/dev/lcsxnmc/server/config/GlobalConfigManager.java
+@@ -34,6 +34,19 @@ public final class GlobalConfigManager {
+         bindFields(yaml, configRoot, null, "");
+     }
+ 
++    /**
++     * Binds a single already-constructed {@link GlobalConfigCategory}-annotated
++     * instance under {@code pathPrefix}, for callers that are not part of a
++     * config root's static field tree (e.g. a plugin-supplied config section).
++     *
++     * @param yaml       the backing yaml document
++     * @param instance   the category instance to bind
++     * @param pathPrefix the yaml path prefix, e.g. {@code "legacy-providers.acme."}
++     */
++    public static void bindInstance(YamlConfiguration yaml, Object instance, String pathPrefix) {
++        bindFields(yaml, instance.getClass(), instance, pathPrefix);
++    }
++
+     private static void bindFields(YamlConfiguration yaml, Class<?> type, Object instance, String pathPrefix) {
+         for (Field field : type.getDeclaredFields()) {
+             if (field.isSynthetic() || (instance == null && !Modifier.isStatic(field.getModifiers()))) {
+diff --git a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+index 54468cddd62c477bdf350bee580a91062adb4e93..e121d0957d05ed3182a7d986cdb638a8dc833cad 100644
+--- a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+@@ -1,14 +1,18 @@
+ package dev.lcsxnmc.server.plugin;
+ 
++import dev.lcsxnmc.api.legacy.LegacyBehaviorProvider;
+ import dev.lcsxnmc.api.plugin.FeatureManager;
+ import dev.lcsxnmc.server.LcsXNMCConfig;
+ import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
+ import java.util.stream.Collectors;
+ import org.bukkit.Bukkit;
+ import org.jetbrains.annotations.NotNull;
+ 
+ public final class LcsXNMCFeatureManager implements FeatureManager {
+ 
++    private final Set<LegacyBehaviorProvider> providers = ConcurrentHashMap.newKeySet();
++
+     private static final Set<String> KNOWN_FEATURES = Set.of(
+         "debug-logging",
+         "reduce-entity-attribute-allocations",
+@@ -73,4 +77,25 @@ public final class LcsXNMCFeatureManager implements FeatureManager {
+     public String getLcsXNMCVersion() {
+         return Bukkit.getVersion();
+     }
++
++    @Override
++    public void registerProvider(@NotNull LegacyBehaviorProvider provider) {
++        if (this.providers.add(provider)) {
++            Object configSection = provider.getConfigSection();
++            if (configSection != null) {
++                LcsXNMCConfig.bindExtra(configSection, "legacy-providers." + provider.getId() + ".");
++            }
++        }
++    }
++
++    @Override
++    public void unregisterProvider(@NotNull LegacyBehaviorProvider provider) {
++        this.providers.remove(provider);
++    }
++
++    @Override
++    @NotNull
++    public Set<LegacyBehaviorProvider> getRegisteredProviders() {
++        return Set.copyOf(this.providers);
++    }
+ }
+\ No newline at end of file
+diff --git a/src/test/java/dev/lcsxnmc/server/config/GlobalConfigManagerTest.java b/src/test/java/dev/lcsxnmc/server/config/GlobalConfigManagerTest.java
+index d876cba502b82a61c742139080fa9fef40bb1c6a..f10b464f3a31123ffa950c0ebf1c0346507f9d0e 100644
+--- a/src/test/java/dev/lcsxnmc/server/config/GlobalConfigManagerTest.java
++++ b/src/test/java/dev/lcsxnmc/server/config/GlobalConfigManagerTest.java
+@@ -91,4 +91,31 @@ public class GlobalConfigManagerTest {
+         assertTrue(SampleConfig.features.debugLogging);
+         assertEquals(8, SampleConfig.features.workerThreads);
+     }
++
++    // Deliberately not @GlobalConfigCategory-annotated: bindInstance() takes an
++    // explicit path prefix from the caller instead of relying on annotation-driven
++    // category detection, since a plugin-supplied section isn't reachable from
++    // LcsXNMCConfig's own static field tree.
++    public static final class SampleInstanceSection {
++        @GlobalConfig("enabled")
++        public boolean enabled = true;
++
++        @GlobalConfig("threshold")
++        public int threshold = 5;
++    }
++
++    @Test
++    public void bindInstanceBindsAPlainObjectUnderAPathPrefixLikeAPluginProvidedConfigSection() {
++        YamlConfiguration yaml = new YamlConfiguration();
++        SampleInstanceSection section = new SampleInstanceSection();
++
++        GlobalConfigManager.bindInstance(yaml, section, "legacy-providers.acme.");
++
++        assertTrue(yaml.getBoolean("legacy-providers.acme.enabled"));
++        assertEquals(5, yaml.getInt("legacy-providers.acme.threshold"));
++
++        yaml.set("legacy-providers.acme.threshold", 9);
++        GlobalConfigManager.bindInstance(yaml, section, "legacy-providers.acme.");
++        assertEquals(9, section.threshold);
++    }
+ }
+\ No newline at end of file

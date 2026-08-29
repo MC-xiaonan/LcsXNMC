@@ -1,0 +1,432 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 14:26:17 +0800
+Subject: [PATCH] Phase 3: LcsXNMCComputeExecutor bounded range executor +
+ config + tests
+
+
+diff --git a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+index 5cabb3c66c56c55d4b3c01ac0197a0d33f3d83f2..9017af47f7e26aa649c988bec4f04d5a4e235041 100644
+--- a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
++++ b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+@@ -106,6 +106,33 @@ public final class LcsXNMCConfig {
+         public boolean crafter1gtDelay = false;
+     }
+ 
++    public static ParallelismCategory parallelism = new ParallelismCategory();
++
++    /**
++     * Optional multi-threaded offload for a small set of hot, purely
++     * per-index numeric loops (see {@link dev.lcsxnmc.server.runtime.LcsXNMCComputeExecutor}).
++     * Every offload is opt-in and independently toggled; {@code workers <= 1}
++     * or a disabled toggle always falls back to the exact original
++     * single-threaded code path.
++     */
++    @GlobalConfigCategory("parallelism")
++    public static final class ParallelismCategory {
++        @GlobalConfig("workers")
++        public int workers = 0;
++
++        @GlobalConfig("parallel-activation-range")
++        public boolean parallelActivationRange = false;
++
++        @GlobalConfig("activation-range-minimum-batch")
++        public int activationRangeMinimumBatch = 64;
++
++        @GlobalConfig("parallel-target-search")
++        public boolean parallelTargetSearch = false;
++
++        @GlobalConfig("target-search-minimum-batch")
++        public int targetSearchMinimumBatch = 32;
++    }
++
+     private static File configFile;
+     private static YamlConfiguration config;
+ 
+@@ -119,6 +146,7 @@ public final class LcsXNMCConfig {
+         config.options().header(HEADER);
+         GlobalConfigManager.load(config, LcsXNMCConfig.class);
+         save();
++        dev.lcsxnmc.server.runtime.LcsXNMCComputeExecutors.reload();
+     }
+ 
+     private static void save() {
+diff --git a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+index 1845fff9a19b27be664a34f3f8a8c41a5d7f582f..54468cddd62c477bdf350bee580a91062adb4e93 100644
+--- a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+@@ -25,7 +25,9 @@ public final class LcsXNMCFeatureManager implements FeatureManager {
+         "update-suppression-item-drop",
+         "update-suppression-block-place",
+         "copper-bulb-1gt-delay",
+-        "crafter-1gt-delay"
++        "crafter-1gt-delay",
++        "parallel-activation-range",
++        "parallel-target-search"
+     );
+ 
+     @Override
+@@ -48,6 +50,8 @@ public final class LcsXNMCFeatureManager implements FeatureManager {
+             case "update-suppression-block-place" -> LcsXNMCConfig.fixes.updateSuppressionBlockPlace;
+             case "copper-bulb-1gt-delay" -> LcsXNMCConfig.legacy.copperBulb1gtDelay;
+             case "crafter-1gt-delay" -> LcsXNMCConfig.legacy.crafter1gtDelay;
++            case "parallel-activation-range" -> LcsXNMCConfig.parallelism.parallelActivationRange;
++            case "parallel-target-search" -> LcsXNMCConfig.parallelism.parallelTargetSearch;
+             default -> false;
+         };
+     }
+diff --git a/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutor.java b/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutor.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f2c9a8c9caa0be2dc8e0a407b1e74b6f633f3b51
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutor.java
+@@ -0,0 +1,118 @@
++package dev.lcsxnmc.server.runtime;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.ThreadFactory;
++import java.util.concurrent.atomic.AtomicInteger;
++
++/**
++ * A small bounded range executor used to optionally offload a handful of
++ * hot, per-index numeric loops (see call sites gated behind
++ * {@code parallelism.*} in {@code lcsxnmc.yml}) onto a fixed worker pool.
++ * <p>
++ * This is an original, deliberately narrow implementation: it only knows how
++ * to run {@link RangeTask} over contiguous sub-ranges of {@code [0, size)}.
++ * Callers are responsible for making sure a {@link RangeTask} only ever
++ * writes into the sub-range it was given (e.g. per-index slots of a
++ * pre-sized output array) - never into state shared across indices - so
++ * that whether or how a range gets split never changes the result.
++ * <p>
++ * Two independent safety nets keep a splitting decision from ever being
++ * allowed to affect correctness: a pre-check before attempting to split at
++ * all (too few workers, or too small a range to be worth it, both just run
++ * the whole range synchronously), and an exception fallback (any parallel
++ * chunk throwing discards every chunk's output and re-runs the *entire*
++ * range synchronously - partial parallel results are never mixed with a
++ * fallback run).
++ */
++public final class LcsXNMCComputeExecutor {
++
++    @FunctionalInterface
++    public interface RangeTask {
++        void run(int fromInclusive, int toExclusive);
++    }
++
++    private final int workers;
++    private final ExecutorService pool;
++
++    public LcsXNMCComputeExecutor(final int workers) {
++        this.workers = Math.max(0, workers);
++        this.pool = this.workers > 1 ? Executors.newFixedThreadPool(this.workers, new ComputeThreadFactory()) : null;
++    }
++
++    /**
++     * Runs {@code task} once per contiguous sub-range of {@code [0, size)},
++     * each sub-range at least {@code minimumSize} wide, in parallel across
++     * this executor's pool - or once, synchronously on the calling thread
++     * over the full {@code [0, size)} range, if this executor has fewer
++     * than 2 workers, {@code size} isn't large enough to make splitting
++     * worthwhile, or any parallel chunk throws.
++     */
++    public void invokeRanges(final int size, final int minimumSize, final RangeTask task) {
++        if (size <= 0) {
++            return;
++        }
++        if (minimumSize <= 0) {
++            throw new IllegalArgumentException("minimumSize must be positive");
++        }
++
++        // Pre-check fallback: not enough workers, or not enough work to split.
++        final int chunkCount = this.pool == null ? 1 : Math.min(this.workers, size / minimumSize);
++        if (chunkCount <= 1) {
++            task.run(0, size);
++            return;
++        }
++
++        final List<Future<?>> futures = new ArrayList<>(chunkCount);
++        final int base = size / chunkCount;
++        final int remainder = size % chunkCount;
++        int start = 0;
++        try {
++            for (int i = 0; i < chunkCount; i++) {
++                final int chunkSize = base + (i < remainder ? 1 : 0);
++                final int from = start;
++                final int to = start + chunkSize;
++                futures.add(this.pool.submit(() -> task.run(from, to)));
++                start = to;
++            }
++            for (final Future<?> future : futures) {
++                future.get();
++            }
++        } catch (final InterruptedException e) {
++            Thread.currentThread().interrupt();
++            cancelAll(futures);
++            // Exception fallback: discard every chunk's output, redo the whole range.
++            task.run(0, size);
++        } catch (final Exception e) {
++            cancelAll(futures);
++            // Exception fallback: discard every chunk's output, redo the whole range.
++            task.run(0, size);
++        }
++    }
++
++    private static void cancelAll(final List<Future<?>> futures) {
++        for (final Future<?> future : futures) {
++            future.cancel(true);
++        }
++    }
++
++    public void shutdown() {
++        if (this.pool != null) {
++            this.pool.shutdown();
++        }
++    }
++
++    private static final class ComputeThreadFactory implements ThreadFactory {
++        private final AtomicInteger id = new AtomicInteger(1);
++
++        @Override
++        public Thread newThread(final Runnable runnable) {
++            final Thread thread = new Thread(runnable, "LcsXNMC Compute Worker-" + this.id.getAndIncrement());
++            thread.setDaemon(true);
++            return thread;
++        }
++    }
++}
+diff --git a/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutors.java b/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutors.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b3aef563f791dd113c5a9317e4d965dc6feaff2
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutors.java
+@@ -0,0 +1,29 @@
++package dev.lcsxnmc.server.runtime;
++
++import dev.lcsxnmc.server.LcsXNMCConfig;
++
++/**
++ * Holds the single shared {@link LcsXNMCComputeExecutor} instance used by
++ * every {@code parallelism.*}-gated call site, sized from
++ * {@code LcsXNMCConfig.parallelism.workers}. Call {@link #reload()} after
++ * {@code LcsXNMCConfig} (re)loads so the pool size always tracks the
++ * config's current value, on both initial startup and {@code /lcsxnmc
++ * reload}.
++ */
++public final class LcsXNMCComputeExecutors {
++
++    private LcsXNMCComputeExecutors() {
++    }
++
++    private static volatile LcsXNMCComputeExecutor instance = new LcsXNMCComputeExecutor(0);
++
++    public static LcsXNMCComputeExecutor get() {
++        return instance;
++    }
++
++    public static synchronized void reload() {
++        final LcsXNMCComputeExecutor previous = instance;
++        instance = new LcsXNMCComputeExecutor(LcsXNMCConfig.parallelism.workers);
++        previous.shutdown();
++    }
++}
+diff --git a/src/test/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutorTest.java b/src/test/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutorTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..974a1cd5a28c7bf0d9f83e2223b2788f28729844
+--- /dev/null
++++ b/src/test/java/dev/lcsxnmc/server/runtime/LcsXNMCComputeExecutorTest.java
+@@ -0,0 +1,190 @@
++package dev.lcsxnmc.server.runtime;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Random;
++import java.util.concurrent.atomic.AtomicBoolean;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++@Normal
++public class LcsXNMCComputeExecutorTest {
++
++    private static int[] expectedSquares(final int size) {
++        final int[] expected = new int[size];
++        for (int i = 0; i < size; i++) {
++            expected[i] = i * i;
++        }
++        return expected;
++    }
++
++    @Test
++    public void shardedRangesCoverEveryIndexExactlyOnce() {
++        final int size = 997; // deliberately not evenly divisible by common worker counts
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(6);
++        final int[] output = new int[size];
++
++        executor.invokeRanges(size, 10, (from, to) -> {
++            for (int i = from; i < to; i++) {
++                output[i] = i * i;
++            }
++        });
++        executor.shutdown();
++
++        assertArrayEquals(expectedSquares(size), output);
++    }
++
++    @Test
++    public void workerCountNeverChangesTheResult() {
++        final int size = 2000;
++        final int[] expected = expectedSquares(size);
++
++        for (final int workers : new int[] {0, 1, 2, 4, 8, 16}) {
++            final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(workers);
++            final int[] output = new int[size];
++
++            executor.invokeRanges(size, 25, (from, to) -> {
++                for (int i = from; i < to; i++) {
++                    output[i] = i * i;
++                }
++            });
++            executor.shutdown();
++
++            assertArrayEquals(expected, output, "workers=" + workers + " must match the sequential result");
++        }
++    }
++
++    @Test
++    public void rangeSmallerThanMinimumSizeRunsAsASingleSynchronousCall() {
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(8);
++        final List<int[]> invocations = new ArrayList<>();
++
++        executor.invokeRanges(5, 100, (from, to) -> {
++            synchronized (invocations) {
++                invocations.add(new int[] {from, to});
++            }
++        });
++        executor.shutdown();
++
++        assertEquals(1, invocations.size(), "too small a range must not be split");
++        assertArrayEquals(new int[] {0, 5}, invocations.get(0));
++    }
++
++    @Test
++    public void zeroOrOneWorkersAlwaysRunsAsASingleSynchronousCall() {
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(1);
++        final List<int[]> invocations = new ArrayList<>();
++
++        executor.invokeRanges(500, 10, (from, to) -> {
++            synchronized (invocations) {
++                invocations.add(new int[] {from, to});
++            }
++        });
++
++        assertEquals(1, invocations.size());
++        assertArrayEquals(new int[] {0, 500}, invocations.get(0));
++    }
++
++    @Test
++    public void emptyRangeNeverInvokesTheTask() {
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(4);
++        final AtomicBoolean invoked = new AtomicBoolean(false);
++
++        executor.invokeRanges(0, 10, (from, to) -> invoked.set(true));
++        executor.shutdown();
++
++        assertTrue(!invoked.get());
++    }
++
++    @Test
++    public void nonPositiveMinimumSizeIsRejected() {
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(4);
++
++        assertThrows(IllegalArgumentException.class, () -> executor.invokeRanges(100, 0, (from, to) -> { }));
++    }
++
++    @Test
++    public void exceptionDuringAParallelChunkDiscardsPartialOutputAndRetriesTheWholeRangeSynchronously() {
++        final int size = 400;
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(4);
++        final int[] output = new int[size];
++        final List<int[]> invocations = new ArrayList<>();
++
++        executor.invokeRanges(size, 20, (from, to) -> {
++            synchronized (invocations) {
++                invocations.add(new int[] {from, to});
++            }
++            // Every non-first parallel chunk fails; only a full-range (from == 0) retry succeeds.
++            // This forces the executor's exception fallback every time it attempts to split.
++            if (from != 0) {
++                throw new RuntimeException("simulated failure in a parallel chunk");
++            }
++            for (int i = from; i < to; i++) {
++                output[i] = i * i;
++            }
++        });
++        executor.shutdown();
++
++        // The final (fallback) call must cover the whole range on its own, and the output must be
++        // fully correct - never a mix of the aborted parallel attempt's partial writes and the fallback.
++        final int[] last = invocations.get(invocations.size() - 1);
++        assertArrayEquals(new int[] {0, size}, last);
++        assertArrayEquals(expectedSquares(size), output);
++    }
++
++    @Test
++    public void chunksArePlausiblyBalanced() {
++        final int size = 10_000;
++        final LcsXNMCComputeExecutor executor = new LcsXNMCComputeExecutor(4);
++        final List<int[]> invocations = new ArrayList<>();
++
++        executor.invokeRanges(size, 10, (from, to) -> {
++            synchronized (invocations) {
++                invocations.add(new int[] {from, to});
++            }
++        });
++        executor.shutdown();
++
++        assertEquals(4, invocations.size());
++        int coveredTotal = 0;
++        for (final int[] range : invocations) {
++            final int chunkSize = range[1] - range[0];
++            assertTrue(chunkSize >= size / 4 - 1 && chunkSize <= size / 4 + 1, "chunk sizes should be near-equal");
++            coveredTotal += chunkSize;
++        }
++        assertEquals(size, coveredTotal);
++    }
++
++    @Test
++    public void largeRandomWorkloadMatchesSequentialBaseline() {
++        final Random random = new Random(42);
++        final int size = 5_000;
++        final int[] input = new int[size];
++        for (int i = 0; i < size; i++) {
++            input[i] = random.nextInt(1000);
++        }
++
++        final int[] sequential = new int[size];
++        new LcsXNMCComputeExecutor(0).invokeRanges(size, 32, (from, to) -> {
++            for (int i = from; i < to; i++) {
++                sequential[i] = input[i] * 2 + 1;
++            }
++        });
++
++        final int[] parallel = new int[size];
++        final LcsXNMCComputeExecutor parallelExecutor = new LcsXNMCComputeExecutor(8);
++        parallelExecutor.invokeRanges(size, 32, (from, to) -> {
++            for (int i = from; i < to; i++) {
++                parallel[i] = input[i] * 2 + 1;
++            }
++        });
++        parallelExecutor.shutdown();
++
++        assertArrayEquals(sequential, parallel);
++    }
++}

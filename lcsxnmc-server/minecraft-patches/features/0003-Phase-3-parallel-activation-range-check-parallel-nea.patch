@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 14:26:40 +0800
+Subject: [PATCH] Phase 3: parallel activation range check + parallel
+ nearest-target search
+
+
+diff --git a/io/papermc/paper/entity/activation/ActivationRange.java b/io/papermc/paper/entity/activation/ActivationRange.java
+index 829f7685904fd741e00403647ae76d32275c34a3..019f0fdd6610940321f23d4654d6c35024a61545 100644
+--- a/io/papermc/paper/entity/activation/ActivationRange.java
++++ b/io/papermc/paper/entity/activation/ActivationRange.java
+@@ -160,6 +160,27 @@ public final class ActivationRange {
+ 
+             final List<Entity> entities = world.getEntities((Entity) null, ActivationRange.maxBB, e -> true);
+             final boolean tickMarkers = world.paperConfig().entities.markers.tick;
++            // LcsXNMC start - parallel-activation-range: offload the per-entity AABB-intersection check onto
++            // a bounded worker pool when there are enough entities in range to make it worthwhile. Each
++            // worker only ever touches the single entity at its own index - activateEntity only writes
++            // fields on that one entity - so splitting this loop across threads never changes the result.
++            if (dev.lcsxnmc.server.LcsXNMCConfig.parallelism.parallelActivationRange) {
++                dev.lcsxnmc.server.runtime.LcsXNMCComputeExecutors.get().invokeRanges(
++                    entities.size(),
++                    dev.lcsxnmc.server.LcsXNMCConfig.parallelism.activationRangeMinimumBatch,
++                    (from, to) -> {
++                        for (int i = from; i < to; i++) {
++                            final Entity entity = entities.get(i);
++                            if (!tickMarkers && entity instanceof Marker) {
++                                continue;
++                            }
++
++                            ActivationRange.activateEntity(entity);
++                        }
++                    }
++                );
++            } else {
++            // LcsXNMC end
+             for (final Entity entity : entities) {
+                 if (!tickMarkers && entity instanceof Marker) {
+                     continue;
+@@ -167,6 +188,7 @@ public final class ActivationRange {
+ 
+                 ActivationRange.activateEntity(entity);
+             }
++            } // LcsXNMC - parallel-activation-range
+         }
+     }
+ 
+diff --git a/net/minecraft/server/level/ServerEntityGetter.java b/net/minecraft/server/level/ServerEntityGetter.java
+index cc6f4e2845ef1e95c765d65f17c8aa1b06652927..31a0aa69d08f9b6685540d6aec1aa51b30a65c2f 100644
+--- a/net/minecraft/server/level/ServerEntityGetter.java
++++ b/net/minecraft/server/level/ServerEntityGetter.java
+@@ -89,6 +89,40 @@ public interface ServerEntityGetter extends EntityGetter {
+         final double y,
+         final double z
+     ) {
++        // LcsXNMC start - parallel-target-search: offload the per-candidate targetConditions.test() plus
++        // distance computation onto a bounded worker pool when there are enough candidates to make it
++        // worthwhile. Each worker only ever writes its own index of the per-candidate arrays below - the
++        // actual nearest-match reduction happens afterwards, sequentially, scanning the same 0..size order
++        // the original loop used - so splitting this search across threads never changes which entity wins.
++        if (dev.lcsxnmc.server.LcsXNMCConfig.parallelism.parallelTargetSearch && entities.size() >= 2) {
++            final boolean[] passed = new boolean[entities.size()];
++            final double[] distances = new double[entities.size()];
++            dev.lcsxnmc.server.runtime.LcsXNMCComputeExecutors.get().invokeRanges(
++                entities.size(),
++                dev.lcsxnmc.server.LcsXNMCConfig.parallelism.targetSearchMinimumBatch,
++                (from, to) -> {
++                    for (int i = from; i < to; i++) {
++                        T candidate = entities.get(i);
++                        if (targetConditions.test(this.getLevel(), source, candidate)) {
++                            passed[i] = true;
++                            distances[i] = candidate.distanceToSqr(x, y, z);
++                        }
++                    }
++                }
++            );
++
++            double parallelBest = -1.0;
++            T parallelResult = null;
++            for (int i = 0; i < entities.size(); i++) {
++                if (passed[i] && (parallelBest == -1.0 || distances[i] < parallelBest)) {
++                    parallelBest = distances[i];
++                    parallelResult = entities.get(i);
++                }
++            }
++            return parallelResult;
++        }
++        // LcsXNMC end
++
+         double best = -1.0;
+         T result = null;
+ 

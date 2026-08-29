@@ -7,6 +7,7 @@ build
 /run
 /.smoketest_phase1
 /.smoketest_phase2
+/.smoketest_phase3
 /dist
 
 /lcsxnmc-server/build.gradle.kts

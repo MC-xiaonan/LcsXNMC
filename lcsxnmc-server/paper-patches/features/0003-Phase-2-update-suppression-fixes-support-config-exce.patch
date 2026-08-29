@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 28 Aug 2026 21:21:40 +0800
+Subject: [PATCH] Phase 2: update-suppression fixes support (config + exception
+ type)
+
+Adds UpdateSuppressionException, the lightweight control-flow signal
+thrown from known crash-prone block/block-entity race sites and caught
+at tick/packet dispatch loops to skip just the offending operation
+instead of crashing the server. Config toggles for the four
+update-suppression sub-fixes were already wired in LcsXNMCConfig.
+
+diff --git a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+index 7b2b49ac8933277c032d2a0ff3e5743300940221..5cabb3c66c56c55d4b3c01ac0197a0d33f3d83f2 100644
+--- a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
++++ b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+@@ -33,6 +33,79 @@ public final class LcsXNMCConfig {
+         public boolean debugLogging = false;
+     }
+ 
++    public static PerformanceCategory performance = new PerformanceCategory();
++
++    /**
++     * Micro-optimizations that never change observable behavior; each one is
++     * safe to disable to fall back to the original, unoptimized code path.
++     */
++    @GlobalConfigCategory("performance")
++    public static final class PerformanceCategory {
++        @GlobalConfig("reduce-entity-attribute-allocations")
++        public boolean reduceEntityAttributeAllocations = true;
++
++        @GlobalConfig("remove-tick-guard-lambda")
++        public boolean removeTickGuardLambda = true;
++
++        @GlobalConfig("cache-climb-check")
++        public boolean cacheClimbCheck = true;
++
++        @GlobalConfig("skip-secondary-poi-sensor-if-absent")
++        public boolean skipSecondaryPoiSensorIfAbsent = true;
++
++        @GlobalConfig("reduce-explosion-damage-calculator-allocation")
++        public boolean reduceExplosionDamageCalculatorAllocation = true;
++
++        @GlobalConfig("array-based-mob-cap")
++        public boolean arrayBasedMobCap = true;
++    }
++
++    public static FixesCategory fixes = new FixesCategory();
++
++    /**
++     * Bug fixes and crash-avoidance behavior. Disabling any of these restores
++     * the exact original (buggier, or crash-prone) behavior.
++     */
++    @GlobalConfigCategory("fixes")
++    public static final class FixesCategory {
++        @GlobalConfig("stacked-container-destroyed-drop")
++        public boolean stackedContainerDestroyedDrop = true;
++
++        @GlobalConfig("stuck-neutral-mob-anger-target")
++        public boolean stuckNeutralMobAngerTarget = false;
++
++        @GlobalConfig("spectator-piercing-weapon-attack")
++        public boolean spectatorPiercingWeaponAttack = true;
++
++        @GlobalConfig("update-suppression-crash")
++        public boolean updateSuppressionCrash = true;
++
++        @GlobalConfig("update-suppression-sound")
++        public boolean updateSuppressionSound = true;
++
++        @GlobalConfig("update-suppression-item-drop")
++        public boolean updateSuppressionItemDrop = true;
++
++        @GlobalConfig("update-suppression-block-place")
++        public boolean updateSuppressionBlockPlace = true;
++    }
++
++    public static LegacyCategory legacy = new LegacyCategory();
++
++    /**
++     * Opt-in toggles that restore an older Minecraft version's mechanics.
++     * Every one of these defaults to {@code false}: turning LcsXNMC's legacy
++     * behavior on is always a deliberate choice by the server owner.
++     */
++    @GlobalConfigCategory("legacy")
++    public static final class LegacyCategory {
++        @GlobalConfig("copper-bulb-1gt-delay")
++        public boolean copperBulb1gtDelay = false;
++
++        @GlobalConfig("crafter-1gt-delay")
++        public boolean crafter1gtDelay = false;
++    }
++
+     private static File configFile;
+     private static YamlConfiguration config;
+ 
+diff --git a/src/main/java/dev/lcsxnmc/server/UpdateSuppressionException.java b/src/main/java/dev/lcsxnmc/server/UpdateSuppressionException.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..220d8de7bb9664c32f1907333b78a206a7c057a0
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/server/UpdateSuppressionException.java
+@@ -0,0 +1,16 @@
++package dev.lcsxnmc.server;
++
++/**
++ * Thrown from known crash-prone spots where a block/block-entity reference has gone
++ * stale because of a racing update within the same tick (e.g. the block changed between
++ * a lookup and a later cast). Caught by the tick/packet dispatch loops to skip just the
++ * one offending operation instead of taking down the whole server. Only ever thrown when
++ * {@code LcsXNMCConfig.fixes.updateSuppressionCrash} is enabled.
++ */
++public final class UpdateSuppressionException extends RuntimeException {
++
++    public UpdateSuppressionException(final String reason, final Throwable cause) {
++        // no stack trace capture - this is a recoverable control-flow signal, not a real crash
++        super(reason, cause, false, false);
++    }
++}
+diff --git a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+index b667e6e3c7ac876a6aa05c8cbaef0f5bd7c3a03a..1845fff9a19b27be664a34f3f8a8c41a5d7f582f 100644
+--- a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+@@ -9,12 +9,45 @@ import org.jetbrains.annotations.NotNull;
+ 
+ public final class LcsXNMCFeatureManager implements FeatureManager {
+ 
+-    private static final Set<String> KNOWN_FEATURES = Set.of("debug-logging");
++    private static final Set<String> KNOWN_FEATURES = Set.of(
++        "debug-logging",
++        "reduce-entity-attribute-allocations",
++        "remove-tick-guard-lambda",
++        "cache-climb-check",
++        "skip-secondary-poi-sensor-if-absent",
++        "reduce-explosion-damage-calculator-allocation",
++        "array-based-mob-cap",
++        "stacked-container-destroyed-drop",
++        "stuck-neutral-mob-anger-target",
++        "spectator-piercing-weapon-attack",
++        "update-suppression-crash",
++        "update-suppression-sound",
++        "update-suppression-item-drop",
++        "update-suppression-block-place",
++        "copper-bulb-1gt-delay",
++        "crafter-1gt-delay"
++    );
+ 
+     @Override
+     public boolean isFeatureEnabled(@NotNull String key) {
+         return switch (key) {
+             case "debug-logging" -> LcsXNMCConfig.features.debugLogging;
++            case "reduce-entity-attribute-allocations" -> LcsXNMCConfig.performance.reduceEntityAttributeAllocations;
++            case "remove-tick-guard-lambda" -> LcsXNMCConfig.performance.removeTickGuardLambda;
++            case "cache-climb-check" -> LcsXNMCConfig.performance.cacheClimbCheck;
++            case "skip-secondary-poi-sensor-if-absent" -> LcsXNMCConfig.performance.skipSecondaryPoiSensorIfAbsent;
++            case "reduce-explosion-damage-calculator-allocation" ->
++                LcsXNMCConfig.performance.reduceExplosionDamageCalculatorAllocation;
++            case "array-based-mob-cap" -> LcsXNMCConfig.performance.arrayBasedMobCap;
++            case "stacked-container-destroyed-drop" -> LcsXNMCConfig.fixes.stackedContainerDestroyedDrop;
++            case "stuck-neutral-mob-anger-target" -> LcsXNMCConfig.fixes.stuckNeutralMobAngerTarget;
++            case "spectator-piercing-weapon-attack" -> LcsXNMCConfig.fixes.spectatorPiercingWeaponAttack;
++            case "update-suppression-crash" -> LcsXNMCConfig.fixes.updateSuppressionCrash;
++            case "update-suppression-sound" -> LcsXNMCConfig.fixes.updateSuppressionSound;
++            case "update-suppression-item-drop" -> LcsXNMCConfig.fixes.updateSuppressionItemDrop;
++            case "update-suppression-block-place" -> LcsXNMCConfig.fixes.updateSuppressionBlockPlace;
++            case "copper-bulb-1gt-delay" -> LcsXNMCConfig.legacy.copperBulb1gtDelay;
++            case "crafter-1gt-delay" -> LcsXNMCConfig.legacy.crafter1gtDelay;
+             default -> false;
+         };
+     }

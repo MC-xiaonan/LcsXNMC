@@ -5,6 +5,8 @@
 build
 
 /run
+/.smoketest_phase1
+/.smoketest_phase2
 
 /lcsxnmc-server/build.gradle.kts
 /lcsxnmc-server/src/minecraft

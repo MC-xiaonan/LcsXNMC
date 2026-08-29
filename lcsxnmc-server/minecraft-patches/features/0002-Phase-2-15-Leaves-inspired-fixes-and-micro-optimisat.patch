@@ -1,0 +1,634 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 28 Aug 2026 21:22:06 +0800
+Subject: [PATCH] Phase 2: 15 Leaves-inspired fixes and micro-optimisations
+
+Original reimplementations of a shortlisted set of Leaves-style
+patches, each gated behind a LcsXNMCConfig toggle with toggle-off
+preserving exact vanilla behaviour:
+
+- allocation/GC micro-optimisations (LivingEntity, AttributeMap,
+  SecondaryPoiSensor, EntityBasedExplosionDamageCalculator,
+  LocalMobCapCalculator, KineticWeapon, ItemUtils)
+- redstone timing legacy-behaviour toggles (CopperBulbBlock,
+  CrafterBlock)
+- neutral-mob anger-target fix (NeutralMob)
+- update-suppression crash-avoidance subsystem: new
+  UpdateSuppressionException control-flow signal thrown from verified
+  race-prone block/block-entity cast sites (ShelfBlock) and neighbor
+  update dispatch (NeighborUpdater), caught at tick/packet dispatch
+  loops (ServerLevel, Level, PacketProcessor) without letting a
+  suppressed side effect discard an unrelated healthy entity
+- update-suppression-sound: re-validate a sculk sensor's BlockState
+  against the live world before activating, since vibrations can take
+  several ticks to arrive (SculkSensorBlock)
+- update-suppression-item-drop: guarantee level.captureDrops is always
+  cleared and any already-captured drops are still spawned even if the
+  destroy sequence throws partway through (ServerPlayerGameMode)
+- update-suppression-block-place: revert a block placement instead of
+  leaving the world and the player's item stack desynced if
+  setPlacedBy throws a suppressed update exception (BlockItem)
+
+diff --git a/net/minecraft/network/PacketProcessor.java b/net/minecraft/network/PacketProcessor.java
+index 408cb996fc8ff77785da8919f19baff2cf4bd789..44ed34792c4375d3421707fb2f93533fc40b3fd6 100644
+--- a/net/minecraft/network/PacketProcessor.java
++++ b/net/minecraft/network/PacketProcessor.java
+@@ -95,6 +95,12 @@ public class PacketProcessor implements AutoCloseable {
+             if (this.listener.shouldHandleMessage(this.packet)) {
+                 try {
+                     this.packet.handle(this.listener);
++                // LcsXNMC start - update-suppression-crash: a stale block/block-entity reference raced with this
++                // packet's handling (e.g. a container interaction); skip just this one packet instead of the
++                // full onPacketError disconnect-worthy handling
++                } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++                    PacketProcessor.LOGGER.debug("Suppressed a racy update while handling {}: {}", this.packet, suppressed.getMessage());
++                // LcsXNMC end
+                 } catch (Exception e) {
+                     if (e instanceof ReportedException re && re.getCause() instanceof OutOfMemoryError) {
+                         throw PacketUtils.makeReportedException(e, this.packet, this.listener);
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 59598bfb95c2f8a38efd92685c46a954dc76739d..013e1ccf8ff7f1858ccce6b3d0915152d00016fe 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -901,7 +901,26 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                                     }
+ 
+                                     profiler.push("tick");
+-                                    this.guardEntityTick(this::tickNonPassenger, entity);
++                                    // LcsXNMC start - avoid allocating a this::tickNonPassenger method reference every tick
++                                    if (dev.lcsxnmc.server.LcsXNMCConfig.performance.removeTickGuardLambda) {
++                                        try {
++                                            this.tickNonPassenger(entity);
++                                        // LcsXNMC start - update-suppression-crash: a suppressed side-effect elsewhere doesn't mean
++                                        // this entity itself is broken, so don't discard it like a genuine entity-tick crash
++                                        } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++                                            MinecraftServer.LOGGER.debug("Suppressed a racy update during entity tick: {}", suppressed.getMessage());
++                                        // LcsXNMC end
++                                        } catch (Throwable t) {
++                                            final String msg = String.format("Entity threw exception at %s:%s,%s,%s", io.papermc.paper.util.MCUtil.getLevelName(entity.level()), entity.getX(), entity.getY(), entity.getZ());
++                                            MinecraftServer.LOGGER.error(msg, t);
++                                            this.getCraftServer().getPluginManager().callEvent(new com.destroystokyo.paper.event.server.ServerExceptionEvent(new com.destroystokyo.paper.exception.ServerInternalException(msg, t)));
++                                            entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DISCARD);
++                                        }
++                                        this.moonrise$midTickTasks();
++                                    } else {
++                                        this.guardEntityTick(this::tickNonPassenger, entity);
++                                    }
++                                    // LcsXNMC end
+                                     profiler.pop();
+                                 }
+                             }
+@@ -998,7 +1017,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 // do not use a mutable pos, as some random tick implementations store the input without calling immutable()!
+                 final BlockPos pos = new BlockPos((location & 15) | offsetX, ((location >>> (4 + 4)) & 15) | offsetY, ((location >>> 4) & 15) | offsetZ);
+ 
+-                state.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                // LcsXNMC start - update-suppression-crash: a random tick can trigger a neighbor update that races
++                // with a stale block/block-entity reference; skip just this one tick instead of crashing the server
++                if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionCrash) {
++                    try {
++                        state.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                    } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++                        MinecraftServer.LOGGER.debug("Suppressed a racy random tick update at {}: {}", pos, suppressed.getMessage());
++                    }
++                } else {
++                    state.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                }
++                // LcsXNMC end
+                 if (doubleTickFluids) {
+                     final FluidState fluidState = state.getFluidState();
+                     if (fluidState.isRandomlyTicking()) {
+@@ -1364,7 +1394,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private void tickBlock(final BlockPos pos, final Block type) {
+         BlockState state = this.getBlockState(pos);
+         if (state.is(type)) {
+-            state.tick(this, pos, this.random);
++            // LcsXNMC start - update-suppression-crash: a scheduled block tick can trigger a neighbor update that
++            // races with a stale block/block-entity reference; skip just this one tick instead of crashing the server
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionCrash) {
++                try {
++                    state.tick(this, pos, this.random);
++                } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++                    MinecraftServer.LOGGER.debug("Suppressed a racy block tick update at {}: {}", pos, suppressed.getMessage());
++                }
++            } else {
++                state.tick(this, pos, this.random);
++            }
++            // LcsXNMC end
+         }
+         // Paper start - rewrite chunk system
+         if ((++this.tickedBlocksOrFluids & 7L) != 0L) {
+diff --git a/net/minecraft/server/level/ServerPlayerGameMode.java b/net/minecraft/server/level/ServerPlayerGameMode.java
+index 27bdb82793250b33b457fe027c003948000857c9..ce9fc498c06c8e34445fcbf5616492d8014873b6 100644
+--- a/net/minecraft/server/level/ServerPlayerGameMode.java
++++ b/net/minecraft/server/level/ServerPlayerGameMode.java
+@@ -393,6 +393,12 @@ public class ServerPlayerGameMode {
+         org.bukkit.block.BlockState bState = bblock.getState();
+         this.level.captureDrops = new java.util.ArrayList<>();
+         // CraftBukkit end
++        // LcsXNMC start - update-suppression-item-drop: if an exception unwinds out of the destroy sequence
++        // below (e.g. a suppressed racy neighbor update), level.captureDrops would otherwise be left non-null
++        // forever, silently swallowing every future block/entity item drop in the world into this orphaned
++        // list; guarantee it's always cleared, and anything already captured before the exception is still
++        // dropped into the world instead of lost
++        try {
+         BlockState adjustedState = block.playerWillDestroy(this.level, pos, state, this.player);
+         boolean changed = this.level.removeBlock(pos, false);
+         if (SharedConstants.DEBUG_BLOCK_BREAK) {
+@@ -435,6 +441,16 @@ public class ServerPlayerGameMode {
+         }
+         // Paper end - Trigger bee_nest_destroyed trigger in the correct place
+         // CraftBukkit end
++        } finally {
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionItemDrop && this.level.captureDrops != null) {
++                List<net.minecraft.world.entity.item.ItemEntity> orphanedDrops = this.level.captureDrops;
++                this.level.captureDrops = null;
++                for (net.minecraft.world.entity.item.ItemEntity orphanedDrop : orphanedDrops) {
++                    this.level.addFreshEntity(orphanedDrop);
++                }
++            }
++        }
++        // LcsXNMC end
+ 
+         return true;
+     }
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 3a4da514c163e7565fc241835db52c464a5c4734..d2e20d9f672dbf5f713b4c9119799f657fb624e3 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -278,6 +278,11 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     private long lastKineticHitFeedbackTime = -2147483648L;
+     private BlockPos lastPos;
+     private Optional<BlockPos> lastClimbablePos = Optional.empty();
++    // LcsXNMC start - cache-climb-check: memoize onClimbable() per (tick, blockPos) to avoid repeat block-state lookups
++    private long climbableCheckTick = -1L;
++    private @Nullable BlockPos climbableCheckPos;
++    private boolean climbableCheckResult;
++    // LcsXNMC end
+     private @Nullable DamageSource lastDamageSource;
+     private long lastDamageStamp;
+     protected int autoSpinAttackTicks;
+@@ -2156,22 +2161,40 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     public boolean onClimbable() {
+         if (this.isSpectator()) {
+             return false;
+-        } else {
+-            BlockPos ladderCheckPos = this.blockPosition();
+-            BlockState state = this.getInBlockState();
+-            if (this.isFallFlying() && state.is(BlockTags.CAN_GLIDE_THROUGH)) {
+-                return false;
+-            } else if (state.is(BlockTags.CLIMBABLE)) {
+-                this.lastClimbablePos = Optional.of(ladderCheckPos);
+-                return true;
+-            } else if (state.getBlock() instanceof TrapDoorBlock && this.trapdoorUsableAsLadder(ladderCheckPos, state)) {
+-                this.lastClimbablePos = Optional.of(ladderCheckPos);
+-                return true;
+-            } else {
+-                return false;
++        }
++        // LcsXNMC start - cache-climb-check: reuse the result computed earlier this tick at the same block position
++        if (dev.lcsxnmc.server.LcsXNMCConfig.performance.cacheClimbCheck) {
++            BlockPos currentPos = this.blockPosition();
++            long gameTime = this.level().getGameTime();
++            if (this.climbableCheckTick == gameTime && currentPos.equals(this.climbableCheckPos)) {
++                return this.climbableCheckResult;
+             }
++            boolean result = this.computeOnClimbable(currentPos);
++            this.climbableCheckTick = gameTime;
++            this.climbableCheckPos = currentPos;
++            this.climbableCheckResult = result;
++            return result;
++        }
++        // LcsXNMC end
++        return this.computeOnClimbable(this.blockPosition());
++    }
++
++    // LcsXNMC start - cache-climb-check: extracted so both the cached and uncached paths share one implementation
++    private boolean computeOnClimbable(final BlockPos ladderCheckPos) {
++        BlockState state = this.getInBlockState();
++        if (this.isFallFlying() && state.is(BlockTags.CAN_GLIDE_THROUGH)) {
++            return false;
++        } else if (state.is(BlockTags.CLIMBABLE)) {
++            this.lastClimbablePos = Optional.of(ladderCheckPos);
++            return true;
++        } else if (state.getBlock() instanceof TrapDoorBlock && this.trapdoorUsableAsLadder(ladderCheckPos, state)) {
++            this.lastClimbablePos = Optional.of(ladderCheckPos);
++            return true;
++        } else {
++            return false;
+         }
+     }
++    // LcsXNMC end
+ 
+     private boolean trapdoorUsableAsLadder(final BlockPos pos, final BlockState state) {
+         if (!state.getValue(TrapDoorBlock.OPEN)) {
+diff --git a/net/minecraft/world/entity/NeutralMob.java b/net/minecraft/world/entity/NeutralMob.java
+index 3425ac4f186f144527e612bc895457ba4cd3ff93..2a7e3710db671e30ac3b4d8beb28e00378e44483 100644
+--- a/net/minecraft/world/entity/NeutralMob.java
++++ b/net/minecraft/world/entity/NeutralMob.java
+@@ -68,6 +68,16 @@ public interface NeutralMob {
+             && persistentAngerTarget.matches(previousTarget)
+             && previousTarget instanceof Mob) {
+             this.stopBeingAngry();
++            // LcsXNMC start - stuck-neutral-mob-anger-target: the live AI target can already be null (cleared by
++            // other logic) while the persisted anger target still resolves to a dead/removed entity; without this,
++            // the mob stays "angry" at nothing for the remainder of the anger timer instead of resetting.
++        } else if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.stuckNeutralMobAngerTarget
++            && previousTarget == null
++            && persistentAngerTarget != null
++            && EntityReference.getLivingEntity(persistentAngerTarget, level) instanceof LivingEntity resolvedAngerTarget
++            && (resolvedAngerTarget.isDeadOrDying() || resolvedAngerTarget.isRemoved())) {
++            this.stopBeingAngry();
++            // LcsXNMC end
+         } else {
+             LivingEntity target = this.getTarget();
+             if (target != null) {
+diff --git a/net/minecraft/world/entity/ai/attributes/AttributeMap.java b/net/minecraft/world/entity/ai/attributes/AttributeMap.java
+index 68bad6752bd313ca3ebde7fd4e3b2c46c5dee3ef..31801806e29544baafc7e541e99267005772cb09 100644
+--- a/net/minecraft/world/entity/ai/attributes/AttributeMap.java
++++ b/net/minecraft/world/entity/ai/attributes/AttributeMap.java
+@@ -8,6 +8,7 @@ import java.util.Collection;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.function.Function;
+ import java.util.stream.Collectors;
+ import net.minecraft.core.Holder;
+ import net.minecraft.resources.Identifier;
+@@ -18,9 +19,13 @@ public class AttributeMap {
+     private final Set<AttributeInstance> attributesToSync = new ObjectOpenHashSet<>();
+     private final Set<AttributeInstance> attributesToUpdate = new ObjectOpenHashSet<>();
+     private final AttributeSupplier supplier;
++    // LcsXNMC start - reuse a single instance-factory lambda instead of allocating one per getInstance() call
++    private final Function<Holder<Attribute>, AttributeInstance> instanceFactory;
++    // LcsXNMC end
+ 
+     public AttributeMap(final AttributeSupplier supplier) {
+         this.supplier = supplier;
++        this.instanceFactory = key -> this.supplier.createInstance(this::onAttributeModified, key); // LcsXNMC - see field declaration above
+     }
+ 
+     private void onAttributeModified(final AttributeInstance attributeInstance) {
+@@ -43,6 +48,11 @@ public class AttributeMap {
+     }
+ 
+     public @Nullable AttributeInstance getInstance(final Holder<Attribute> attribute) {
++        // LcsXNMC start - avoid re-allocating the instance-factory lambda on every call
++        if (dev.lcsxnmc.server.LcsXNMCConfig.performance.reduceEntityAttributeAllocations) {
++            return this.attributes.computeIfAbsent(attribute, this.instanceFactory);
++        }
++        // LcsXNMC end
+         return this.attributes.computeIfAbsent(attribute, key -> this.supplier.createInstance(this::onAttributeModified, (Holder<Attribute>)key));
+     }
+ 
+diff --git a/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java b/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java
+index 7d3e843c2d3c5e15b7bea7302d6118419d3a4957..a0e9e4c62618a5c7ee2427bfe1ec482005d3f06a 100644
+--- a/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java
++++ b/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java
+@@ -22,6 +22,14 @@ public class SecondaryPoiSensor extends Sensor<Villager> {
+ 
+     @Override
+     protected void doTick(final ServerLevel level, final Villager body) {
++        // LcsXNMC start - skip-secondary-poi-sensor-if-absent: skip entirely when the profession has no secondary POI
++        // and there is no stale memory left to erase from a prior profession
++        if (dev.lcsxnmc.server.LcsXNMCConfig.performance.skipSecondaryPoiSensorIfAbsent
++            && body.getVillagerData().profession().value().secondaryPoi().isEmpty()
++            && !body.getBrain().hasMemoryValue(MemoryModuleType.SECONDARY_JOB_SITE)) {
++            return;
++        }
++        // LcsXNMC end
+         ResourceKey<Level> dimensionType = level.dimension();
+         BlockPos center = body.blockPosition();
+         List<GlobalPos> jobSites = Lists.newArrayList();
+diff --git a/net/minecraft/world/item/BlockItem.java b/net/minecraft/world/item/BlockItem.java
+index b94c4f0a6908a37d8a07dba6ff3ece7193aca1b5..954af283e175a67140cb4700be7709b86eea9f8c 100644
+--- a/net/minecraft/world/item/BlockItem.java
++++ b/net/minecraft/world/item/BlockItem.java
+@@ -92,7 +92,21 @@ public class BlockItem extends Item {
+                 throw ex; // Rethrow exception if not placed by a player
+             }
+             // Paper end - Reset placed block on exception
+-            placedState.getBlock().setPlacedBy(level, pos, placedState, player, itemStack);
++            // LcsXNMC start - update-suppression-block-place: setPlacedBy can trigger a neighbor update that races
++            // with a stale block/block-entity reference; if suppressed, revert the placement (like the existing
++            // block-entity-tag failure path above) instead of leaving the block placed in the world with the
++            // item never consumed, which would otherwise be a silent item-duplication/desync bug
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionBlockPlace) {
++                try {
++                    placedState.getBlock().setPlacedBy(level, pos, placedState, player, itemStack);
++                } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++                    ((org.bukkit.craftbukkit.block.CraftBlockState) previousState).revertPlace(false);
++                    return InteractionResult.FAIL;
++                }
++            } else {
++                placedState.getBlock().setPlacedBy(level, pos, placedState, player, itemStack);
++            }
++            // LcsXNMC end
+             // CraftBukkit start - special case for handling block placement with water lilies, frog spawn and snow buckets
+             if (player != null && (this instanceof PlaceOnWaterBlockItem || this instanceof SolidBucketItem)) {
+                 org.bukkit.event.block.BlockPlaceEvent placeEvent = org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPlaceEvent((net.minecraft.server.level.ServerLevel) level, player, updatedPlaceContext.getHand(), previousState, pos);
+diff --git a/net/minecraft/world/item/ItemUtils.java b/net/minecraft/world/item/ItemUtils.java
+index cc266f88ea6d02e4bc1bb4299d83710559b0c535..e2c2d025db7621b37a4573f8c6a853c7021545a2 100644
+--- a/net/minecraft/world/item/ItemUtils.java
++++ b/net/minecraft/world/item/ItemUtils.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.world.item;
+ 
++import java.util.List;
+ import java.util.stream.Stream;
+ import net.minecraft.world.InteractionHand;
+ import net.minecraft.world.InteractionResult;
+@@ -44,6 +45,24 @@ public class ItemUtils {
+     public static void onContainerDestroyed(final ItemEntity container, final Stream<ItemStack> contents) {
+         Level level = container.level();
+         if (!level.isClientSide()) {
++            // LcsXNMC start - stacked-container-destroyed-drop: a destroyed item entity can represent several
++            // stacked identical containers (e.g. multiple empty-looking shulker boxes sharing one component-based
++            // stack); vanilla only ever drops one copy's worth of contents, silently deleting the rest.
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.stackedContainerDestroyedDrop) {
++                List<ItemStack> materializedContents = contents.toList();
++                int copies = Math.max(1, container.getItem().getCount());
++                for (int i = 0; i < copies; i++) {
++                    for (ItemStack stack : materializedContents) {
++                        ItemEntity droppedItem = new ItemEntity(level, container.getX(), container.getY(), container.getZ(), stack.copy());
++                        org.bukkit.event.entity.EntityDropItemEvent event = new org.bukkit.event.entity.EntityDropItemEvent(container.getBukkitEntity(), (org.bukkit.entity.Item) droppedItem.getBukkitEntity());
++                        if (event.callEvent()) {
++                            level.addFreshEntity(droppedItem);
++                        }
++                    }
++                }
++                return;
++            }
++            // LcsXNMC end
+             // Paper start - call EntityDropItemEvent
+             contents.forEach(stack -> {
+                 ItemEntity droppedItem = new ItemEntity(level, container.getX(), container.getY(), container.getZ(), stack);
+diff --git a/net/minecraft/world/item/component/KineticWeapon.java b/net/minecraft/world/item/component/KineticWeapon.java
+index a5597339d39e9f1205393b1e8dcc754534193371..34701d6c0e2aa38491ee5920a1f6f2cd9a0c3f62 100644
+--- a/net/minecraft/world/item/component/KineticWeapon.java
++++ b/net/minecraft/world/item/component/KineticWeapon.java
+@@ -100,6 +100,13 @@ public record KineticWeapon(
+     }
+ 
+     public void damageEntities(final ItemStack stack, final int ticksRemaining, final LivingEntity livingEntity, final EquipmentSlot equipmentSlot) {
++        // LcsXNMC start - spectator-piercing-weapon-attack: a kinetic/piercing weapon charge that was already in
++        // progress before the attacker switched to spectator mode would otherwise keep dealing damage every tick,
++        // since this per-tick use callback never re-checks gamemode once the charge has started.
++        if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.spectatorPiercingWeaponAttack && livingEntity.isSpectator()) {
++            return;
++        }
++        // LcsXNMC end
+         int ticksUsed = stack.getUseDuration(livingEntity) - ticksRemaining;
+         if (ticksUsed >= this.delayTicks) {
+             ticksUsed -= this.delayTicks;
+diff --git a/net/minecraft/world/level/EntityBasedExplosionDamageCalculator.java b/net/minecraft/world/level/EntityBasedExplosionDamageCalculator.java
+index 356a3a0dda09af007c3fbddfe360b38f4d7204ce..0d3c845bd1b167fbfbaf88870a87ef6d8d314803 100644
+--- a/net/minecraft/world/level/EntityBasedExplosionDamageCalculator.java
++++ b/net/minecraft/world/level/EntityBasedExplosionDamageCalculator.java
+@@ -17,6 +17,15 @@ public class EntityBasedExplosionDamageCalculator extends ExplosionDamageCalcula
+     public Optional<Float> getBlockExplosionResistance(
+         final Explosion explosion, final BlockGetter level, final BlockPos pos, final BlockState block, final FluidState fluid
+     ) {
++        // LcsXNMC start - reduce-explosion-damage-calculator-allocation: avoid allocating a per-call Optional#map lambda
++        if (dev.lcsxnmc.server.LcsXNMCConfig.performance.reduceExplosionDamageCalculatorAllocation) {
++            Optional<Float> base = super.getBlockExplosionResistance(explosion, level, pos, block, fluid);
++            if (base.isEmpty()) {
++                return base;
++            }
++            return Optional.of(this.source.getBlockExplosionResistance(explosion, level, pos, block, fluid, base.get()));
++        }
++        // LcsXNMC end
+         return super.getBlockExplosionResistance(explosion, level, pos, block, fluid)
+             .map(resistance -> this.source.getBlockExplosionResistance(explosion, level, pos, block, fluid, resistance));
+     }
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index 9286d9bcf3ec4069e77d3133f3d7bf29b2370c5a..f2fe4bf78e2b000d8d3a8de9b7757b5ddc579a50 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -1520,6 +1520,11 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+     public <T extends Entity> void guardEntityTick(final Consumer<T> tick, final T entity) {
+         try {
+             tick.accept(entity);
++        // LcsXNMC start - update-suppression-crash: a suppressed side-effect elsewhere doesn't mean this entity
++        // itself is broken, so don't discard it like a genuine entity-tick crash
++        } catch (dev.lcsxnmc.server.UpdateSuppressionException suppressed) {
++            MinecraftServer.LOGGER.debug("Suppressed a racy update during entity tick: {}", suppressed.getMessage());
++        // LcsXNMC end
+         } catch (Throwable t) {
+             // Paper start - Prevent block entity and entity crashes
+             final String msg = String.format("Entity threw exception at %s:%s,%s,%s", io.papermc.paper.util.MCUtil.getLevelName(entity.level()), entity.getX(), entity.getY(), entity.getZ());
+diff --git a/net/minecraft/world/level/LocalMobCapCalculator.java b/net/minecraft/world/level/LocalMobCapCalculator.java
+index 5b3808e6ff58d350fe3fd65fb56e8f209e1b2c93..5ccbd72d152255911cb793aa09f65832c0e57dff 100644
+--- a/net/minecraft/world/level/LocalMobCapCalculator.java
++++ b/net/minecraft/world/level/LocalMobCapCalculator.java
+@@ -42,14 +42,25 @@ public class LocalMobCapCalculator {
+     }
+ 
+     private static class MobCounts {
+-        private final Object2IntMap<MobCategory> counts = new Object2IntOpenHashMap<>(MobCategory.values().length);
++        // LcsXNMC start - array-based-mob-cap: replace the per-category hash map with a flat int[] indexed by ordinal()
++        private final boolean useArray = dev.lcsxnmc.server.LcsXNMCConfig.performance.arrayBasedMobCap;
++        private final int[] arrayCounts = this.useArray ? new int[MobCategory.values().length] : null;
++        private final Object2IntMap<MobCategory> counts = this.useArray ? null : new Object2IntOpenHashMap<>(MobCategory.values().length);
+ 
+         public void add(final MobCategory category) {
++            if (this.useArray) {
++                this.arrayCounts[category.ordinal()]++;
++                return;
++            }
+             this.counts.computeInt(category, (k, count) -> count == null ? 1 : count + 1);
+         }
+ 
+         public boolean canSpawn(final MobCategory category) {
++            if (this.useArray) {
++                return this.arrayCounts[category.ordinal()] < category.getMaxInstancesPerChunk();
++            }
+             return this.counts.getOrDefault(category, 0) < category.getMaxInstancesPerChunk();
+         }
++        // LcsXNMC end
+     }
+ }
+diff --git a/net/minecraft/world/level/block/CopperBulbBlock.java b/net/minecraft/world/level/block/CopperBulbBlock.java
+index ebc44c7adf15ea8a67b4253a18eafe2c9eadb3e2..a2055bfe95accdd7bd49386215492284982eedc2 100644
+--- a/net/minecraft/world/level/block/CopperBulbBlock.java
++++ b/net/minecraft/world/level/block/CopperBulbBlock.java
+@@ -6,6 +6,7 @@ import net.minecraft.core.Direction;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.sounds.SoundEvents;
+ import net.minecraft.sounds.SoundSource;
++import net.minecraft.util.RandomSource;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.state.BlockBehaviour;
+ import net.minecraft.world.level.block.state.BlockState;
+@@ -30,9 +31,18 @@ public class CopperBulbBlock extends Block {
+         this.registerDefaultState(this.defaultBlockState().setValue(LIT, false).setValue(POWERED, false));
+     }
+ 
++    // LcsXNMC - copper-bulb-1gt-delay: legacy toggle restores the original scheduled 1-tick flip delay
++    private static final int LEGACY_FLIP_DELAY_TICKS = 1;
++
+     @Override
+     protected void onPlace(final BlockState state, final Level level, final BlockPos pos, final BlockState oldState, final boolean movedByPiston) {
+         if (oldState.getBlock() != state.getBlock() && level instanceof ServerLevel serverLevel) {
++            // LcsXNMC start - copper-bulb-1gt-delay
++            if (dev.lcsxnmc.server.LcsXNMCConfig.legacy.copperBulb1gtDelay) {
++                serverLevel.scheduleTick(pos, this, LEGACY_FLIP_DELAY_TICKS);
++                return;
++            }
++            // LcsXNMC end
+             this.checkAndFlip(state, serverLevel, pos);
+         }
+     }
+@@ -42,10 +52,23 @@ public class CopperBulbBlock extends Block {
+         final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
+     ) {
+         if (level instanceof ServerLevel serverLevel) {
++            // LcsXNMC start - copper-bulb-1gt-delay
++            if (dev.lcsxnmc.server.LcsXNMCConfig.legacy.copperBulb1gtDelay) {
++                serverLevel.scheduleTick(pos, this, LEGACY_FLIP_DELAY_TICKS);
++                return;
++            }
++            // LcsXNMC end
+             this.checkAndFlip(state, serverLevel, pos);
+         }
+     }
+ 
++    // LcsXNMC start - copper-bulb-1gt-delay: perform the deferred flip once the scheduled tick fires
++    @Override
++    protected void tick(final BlockState state, final ServerLevel level, final BlockPos pos, final RandomSource random) {
++        this.checkAndFlip(state, level, pos);
++    }
++    // LcsXNMC end
++
+     public void checkAndFlip(final BlockState state, final ServerLevel level, final BlockPos pos) {
+         boolean signal = level.hasNeighborSignal(pos);
+         if (signal != state.getValue(POWERED)) {
+diff --git a/net/minecraft/world/level/block/CrafterBlock.java b/net/minecraft/world/level/block/CrafterBlock.java
+index f0756f3d277103f95e4d5213b5ae788025b72f42..4889a15ddbb5266046c49f136b7a98045f6896be 100644
+--- a/net/minecraft/world/level/block/CrafterBlock.java
++++ b/net/minecraft/world/level/block/CrafterBlock.java
+@@ -47,6 +47,8 @@ public class CrafterBlock extends BaseEntityBlock {
+     private static final EnumProperty<FrontAndTop> ORIENTATION = BlockStateProperties.ORIENTATION;
+     private static final int MAX_CRAFTING_TICKS = 6;
+     private static final int CRAFTING_TICK_DELAY = 4;
++    // LcsXNMC - crafter-1gt-delay: legacy toggle restores the original 1-tick trigger delay
++    private static final int LEGACY_CRAFTING_TICK_DELAY = 1;
+     private static final RecipeCache RECIPE_CACHE = new RecipeCache(10);
+     private static final int CRAFTER_ADVANCEMENT_DIAMETER = 17;
+ 
+@@ -78,7 +80,7 @@ public class CrafterBlock extends BaseEntityBlock {
+         boolean isTriggered = state.getValue(TRIGGERED);
+         BlockEntity blockEntity = level.getBlockEntity(pos);
+         if (shouldTrigger && !isTriggered) {
+-            level.scheduleTick(pos, this, 4);
++            level.scheduleTick(pos, this, this.triggerDelay());
+             level.setBlock(pos, state.setValue(TRIGGERED, true), Block.UPDATE_CLIENTS);
+             this.setBlockEntityTriggered(blockEntity, true);
+         } else if (!shouldTrigger && isTriggered) {
+@@ -127,10 +129,16 @@ public class CrafterBlock extends BaseEntityBlock {
+     @Override
+     public void setPlacedBy(final Level level, final BlockPos pos, final BlockState state, final @Nullable LivingEntity by, final ItemStack itemStack) {
+         if (state.getValue(TRIGGERED)) {
+-            level.scheduleTick(pos, this, 4);
++            level.scheduleTick(pos, this, this.triggerDelay());
+         }
+     }
+ 
++    // LcsXNMC start - crafter-1gt-delay
++    private int triggerDelay() {
++        return dev.lcsxnmc.server.LcsXNMCConfig.legacy.crafter1gtDelay ? LEGACY_CRAFTING_TICK_DELAY : CRAFTING_TICK_DELAY;
++    }
++    // LcsXNMC end
++
+     @Override
+     protected void affectNeighborsAfterRemoval(final BlockState state, final ServerLevel level, final BlockPos pos, final boolean movedByPiston) {
+         Containers.updateNeighboursAfterDestroy(state, level, pos);
+diff --git a/net/minecraft/world/level/block/SculkSensorBlock.java b/net/minecraft/world/level/block/SculkSensorBlock.java
+index 10cff0f9db2910c543c20fa055c0c5b759becc15..a810c0ad02e415b144e6bbfdd5fb0c31b117ae6f 100644
+--- a/net/minecraft/world/level/block/SculkSensorBlock.java
++++ b/net/minecraft/world/level/block/SculkSensorBlock.java
+@@ -227,10 +227,25 @@ public class SculkSensorBlock extends BaseEntityBlock implements SimpleWaterlogg
+         final @Nullable Entity sourceEntity,
+         final Level level,
+         final BlockPos pos,
+-        final BlockState state,
++        BlockState state, // LcsXNMC - update-suppression-sound - remove final
+         int calculatedPower, // Paper - remove final
+         final int vibrationFrequency
+     ) {
++        // LcsXNMC start - update-suppression-sound: a vibration can take several ticks to travel, so the block at
++        // pos may have changed (or lost the properties this sensor relies on) since the state was captured;
++        // re-check against the live world state to avoid an IllegalArgumentException from a stale property set,
++        // or silently activating whatever unrelated block is there now
++        if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionSound) {
++            BlockState currentState = level.getBlockState(pos);
++            if (currentState.getBlock() != state.getBlock()
++                || !currentState.hasProperty(PHASE)
++                || !currentState.hasProperty(POWER)
++                || !currentState.hasProperty(WATERLOGGED)) {
++                return;
++            }
++            state = currentState;
++        }
++        // LcsXNMC end
+         // Paper start - Call BlockRedstoneEvent
+         calculatedPower = org.bukkit.craftbukkit.event.CraftEventFactory.callRedstoneChange(level, pos, state.getValue(POWER), calculatedPower).getNewCurrent();
+         if (calculatedPower == 0) {
+diff --git a/net/minecraft/world/level/block/ShelfBlock.java b/net/minecraft/world/level/block/ShelfBlock.java
+index 8a1313a10b6afeee86ea2245da4bd9beb28d1d84..44ff815323ee3716c89bc73bc73f7c0768958420 100644
+--- a/net/minecraft/world/level/block/ShelfBlock.java
++++ b/net/minecraft/world/level/block/ShelfBlock.java
+@@ -232,7 +232,20 @@ public class ShelfBlock extends BaseEntityBlock implements SelectableSlotContain
+         boolean anySwapped = false;
+ 
+         for (int shelfPartIndex = 0; shelfPartIndex < connectedBlocks.size(); shelfPartIndex++) {
+-            ShelfBlockEntity shelfPart = (ShelfBlockEntity)level.getBlockEntity(connectedBlocks.get(shelfPartIndex));
++            // LcsXNMC start - update-suppression-crash: the connected-blocks list was computed before this loop
++            // started, so a block at one of those positions can have changed (or lost its block entity) in the
++            // meantime; the raw cast below would otherwise throw a ClassCastException and crash the server.
++            BlockEntity rawShelfPartEntity = level.getBlockEntity(connectedBlocks.get(shelfPartIndex));
++            ShelfBlockEntity shelfPart;
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionCrash) {
++                if (!(rawShelfPartEntity instanceof ShelfBlockEntity guardedShelfPart)) {
++                    throw new dev.lcsxnmc.server.UpdateSuppressionException("shelf-block-part-type-mismatch", null);
++                }
++                shelfPart = guardedShelfPart;
++            } else {
++                shelfPart = (ShelfBlockEntity)rawShelfPartEntity;
++            }
++            // LcsXNMC end
+             if (shelfPart != null) {
+                 for (int slot = 0; slot < shelfPart.getContainerSize(); slot++) {
+                     int inventorySlot = 9 - (connectedBlocks.size() - shelfPartIndex) * shelfPart.getContainerSize() + slot;
+diff --git a/net/minecraft/world/level/redstone/NeighborUpdater.java b/net/minecraft/world/level/redstone/NeighborUpdater.java
+index 041ed95948ff6bb4cf3610ce4522a6ba105b6812..75aa0b0a82b005f4aaa54ead6701b415cde34ccb 100644
+--- a/net/minecraft/world/level/redstone/NeighborUpdater.java
++++ b/net/minecraft/world/level/redstone/NeighborUpdater.java
+@@ -48,6 +48,13 @@ public interface NeighborUpdater {
+                 BlockState newState = currentState.updateShape(level, level, pos, direction, neighborPos, neighborState, level.getRandom());
+                 Block.updateOrDestroy(currentState, newState, level, pos, updateFlags, updateLimit);
+             } catch (Throwable t) {
++                // LcsXNMC start - update-suppression-crash: a stale block/block-entity reference raced with this
++                // shape update; skip just this one update instead of crashing the server
++                if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionCrash
++                    && (t instanceof ClassCastException || t instanceof IllegalArgumentException || t instanceof dev.lcsxnmc.server.UpdateSuppressionException)) {
++                    throw new dev.lcsxnmc.server.UpdateSuppressionException("neighbor-shape-update-race", t);
++                }
++                // LcsXNMC end
+                 CrashReport report = CrashReport.forThrowable(t, "Exception while updating neighbour shapes");
+                 CrashReportCategory ownCategory = report.addCategory("Block being updated");
+                 CrashReportCategory.populateBlockDetails(ownCategory, level, pos, currentState);
+@@ -87,6 +94,13 @@ public interface NeighborUpdater {
+             level.lastPhysicsProblem = pos.immutable();
+             // Spigot end
+         } catch (Throwable t) {
++            // LcsXNMC start - update-suppression-crash: a stale block/block-entity reference raced with this
++            // neighbor update; skip just this one update instead of crashing the server
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.updateSuppressionCrash
++                && (t instanceof ClassCastException || t instanceof IllegalArgumentException || t instanceof dev.lcsxnmc.server.UpdateSuppressionException)) {
++                throw new dev.lcsxnmc.server.UpdateSuppressionException("neighbor-changed-race", t);
++            }
++            // LcsXNMC end
+             CrashReport report = CrashReport.forThrowable(t, "Exception while updating neighbours");
+             CrashReportCategory category = report.addCategory("Block being updated");
+             category.setDetail(

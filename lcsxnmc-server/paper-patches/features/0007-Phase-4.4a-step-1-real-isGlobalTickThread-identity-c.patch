@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 18:09:10 +0800
+Subject: [PATCH] Phase 4.4a step 1: real isGlobalTickThread() identity check
+
+TickThread.isTickThread() only asks "is this any tick thread", which
+will start returning true for region worker threads once they exist.
+CraftServer#isGlobalTickThread() and the public Bukkit#isPrimaryThread()
+both relied on that, so region workers would misreport themselves as
+the primary/global thread once region-threading lands.
+
+Add TickThread.global (defaults true, set false by a new protected
+constructor for future RegionWorkerThread) and a real
+isGlobalTickThread(Thread) identity check, and switch both CraftServer
+call sites to it. No behavior change today (only one TickThread
+instance exists, the main server thread), but closes the regression
+before region worker threads are introduced.
+
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+index 69cdd304d255d52c9b7dc9b6a33ffdb630b79abe..8f84666e03298cc7a83058c14687c9d80cfea6bb 100644
+--- a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
++++ b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+@@ -95,6 +95,16 @@ public class TickThread extends Thread {
+ 
+     public final int id; /* We don't override getId as the spec requires that it be unique (with respect to all other threads) */
+ 
++    // LcsXNMC start - region threading: distinguish the single global tick thread from region worker threads
++    /**
++     * True for the single global/main tick thread, false for region worker threads.
++     * Defaults to true so the one existing construction site (the "Server thread" in
++     * {@code MinecraftServer#spin}) is unaffected; region worker threads set this to false
++     * via the protected constructor below.
++     */
++    public final boolean global;
++    // LcsXNMC end - region threading
++
+     private static final AtomicInteger ID_GENERATOR = new AtomicInteger();
+ 
+     public TickThread(final String name) {
+@@ -106,13 +116,20 @@ public class TickThread extends Thread {
+     }
+ 
+     public TickThread(final ThreadGroup group, final Runnable run, final String name) {
+-        this(group, run, name, ID_GENERATOR.incrementAndGet());
++        this(group, run, name, true); // LcsXNMC - region threading
+     }
+ 
+-    private TickThread(final ThreadGroup group, final Runnable run, final String name, final int id) {
++    // LcsXNMC start - region threading
++    protected TickThread(final ThreadGroup group, final Runnable run, final String name, final boolean global) {
++        this(group, run, name, ID_GENERATOR.incrementAndGet(), global);
++    }
++
++    private TickThread(final ThreadGroup group, final Runnable run, final String name, final int id, final boolean global) {
+         super(group, run, name);
+         this.id = id;
++        this.global = global;
+     }
++    // LcsXNMC end - region threading
+ 
+     public static TickThread getCurrentTickThread() {
+         return (TickThread)Thread.currentThread();
+@@ -122,6 +139,21 @@ public class TickThread extends Thread {
+         return Thread.currentThread() instanceof TickThread;
+     }
+ 
++    // LcsXNMC start - region threading: real identity check, not "any tick thread"
++    /**
++     * Unlike {@link #isTickThread()}, this returns false for region worker threads.
++     * Use this (not {@code isTickThread()}) anywhere a caller needs to know it is running
++     * on the single global/main tick thread specifically - e.g. {@code Bukkit.isPrimaryThread()}.
++     */
++    public static boolean isGlobalTickThread() {
++        return isGlobalTickThread(Thread.currentThread());
++    }
++
++    public static boolean isGlobalTickThread(final Thread thread) {
++        return thread instanceof TickThread tickThread && tickThread.global;
++    }
++    // LcsXNMC end - region threading
++
+     public static boolean isShutdownThread() {
+         return false;
+     }
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 570bfa73e94fd3b1c16cab1bdc338c0cd2cc2300..1c07100b584516b18d36055812a141e66814a48a 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -383,7 +383,7 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public final boolean isGlobalTickThread() {
+-        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread();
++        return ca.spottedleaf.moonrise.common.util.TickThread.isGlobalTickThread(); // LcsXNMC - region threading: region workers are tick threads too, but not THE global one
+     }
+     // Paper end - Folia reagion threading API
+ 
+@@ -2307,7 +2307,7 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public boolean isPrimaryThread() {
+-        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Paper - rewrite chunk system
++        return ca.spottedleaf.moonrise.common.util.TickThread.isGlobalTickThread(); // Paper - rewrite chunk system // LcsXNMC - region threading: region workers are tick threads too, but not THE primary/global one
+     }
+ 
+     @Override

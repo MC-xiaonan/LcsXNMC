@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 16:22:57 +0800
+Subject: [PATCH] Phase 4.2: fire BlockPhysicsEvent on the updateShape
+ self-destroy path
+
+
+diff --git a/net/minecraft/world/level/redstone/NeighborUpdater.java b/net/minecraft/world/level/redstone/NeighborUpdater.java
+index 75aa0b0a82b005f4aaa54ead6701b415cde34ccb..9fd82ee0f22fd907f6eb49939a14d50648efed91 100644
+--- a/net/minecraft/world/level/redstone/NeighborUpdater.java
++++ b/net/minecraft/world/level/redstone/NeighborUpdater.java
+@@ -7,6 +7,7 @@ import net.minecraft.ReportedException;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.core.registries.BuiltInRegistries;
++import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.LevelAccessor;
+ import net.minecraft.world.level.block.Block;
+@@ -44,6 +45,19 @@ public interface NeighborUpdater {
+     ) {
+         BlockState currentState = level.getBlockState(pos);
+         if ((updateFlags & Block.UPDATE_SKIP_SHAPE_UPDATE_ON_WIRE) == 0 || !currentState.is(Blocks.REDSTONE_WIRE)) {
++            // LcsXNMC start - fire BlockPhysicsEvent for the shape-update path too (SPIGOT-6045 / Paper#9647):
++            // updateShape can self-destroy a block (redstone wire, repeaters, tripwire hooks, most plants) without
++            // ever going through executeUpdate/neighborChanged below, so previously there was no way for a plugin
++            // to cancel this specific class of physics update. Suppressed outside a real ServerLevel (e.g. during
++            // worldgen), matching the existing BlockPhysicsEvent call sites in Level and CraftEventFactory.
++            if (dev.lcsxnmc.server.LcsXNMCConfig.fixes.shapeUpdatePhysicsEvent
++                && level instanceof ServerLevel serverLevel && serverLevel.hasPhysicsEvent) {
++                org.bukkit.event.block.BlockPhysicsEvent event = new org.bukkit.event.block.BlockPhysicsEvent(org.bukkit.craftbukkit.block.CraftBlock.at(level, pos), currentState.asBlockData());
++                if (!event.callEvent()) {
++                    return;
++                }
++            }
++            // LcsXNMC end
+             try {
+                 BlockState newState = currentState.updateShape(level, level, pos, direction, neighborPos, neighborState, level.getRandom());
+                 Block.updateOrDestroy(currentState, newState, level, pos, updateFlags, updateLimit);

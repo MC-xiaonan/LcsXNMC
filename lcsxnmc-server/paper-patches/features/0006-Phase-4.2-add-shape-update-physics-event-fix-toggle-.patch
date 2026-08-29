@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 29 Aug 2026 16:18:42 +0800
+Subject: [PATCH] Phase 4.2: add shape-update-physics-event fix toggle and
+ wiring
+
+
+diff --git a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+index 514fb22c63d6ddd4a36749bdb0f87b943eb71d6a..b4337a7043ccaa9ea9c8974a855b89df6cd3c1ab 100644
+--- a/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
++++ b/src/main/java/dev/lcsxnmc/server/LcsXNMCConfig.java
+@@ -88,6 +88,9 @@ public final class LcsXNMCConfig {
+ 
+         @GlobalConfig("update-suppression-block-place")
+         public boolean updateSuppressionBlockPlace = true;
++
++        @GlobalConfig("shape-update-physics-event")
++        public boolean shapeUpdatePhysicsEvent = true;
+     }
+ 
+     public static LegacyCategory legacy = new LegacyCategory();
+diff --git a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+index e121d0957d05ed3182a7d986cdb638a8dc833cad..66c6372098b928a2d05551ba322acbe78adca391 100644
+--- a/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/server/plugin/LcsXNMCFeatureManager.java
+@@ -28,6 +28,7 @@ public final class LcsXNMCFeatureManager implements FeatureManager {
+         "update-suppression-sound",
+         "update-suppression-item-drop",
+         "update-suppression-block-place",
++        "shape-update-physics-event",
+         "copper-bulb-1gt-delay",
+         "crafter-1gt-delay",
+         "parallel-activation-range",
+@@ -52,6 +53,7 @@ public final class LcsXNMCFeatureManager implements FeatureManager {
+             case "update-suppression-sound" -> LcsXNMCConfig.fixes.updateSuppressionSound;
+             case "update-suppression-item-drop" -> LcsXNMCConfig.fixes.updateSuppressionItemDrop;
+             case "update-suppression-block-place" -> LcsXNMCConfig.fixes.updateSuppressionBlockPlace;
++            case "shape-update-physics-event" -> LcsXNMCConfig.fixes.shapeUpdatePhysicsEvent;
+             case "copper-bulb-1gt-delay" -> LcsXNMCConfig.legacy.copperBulb1gtDelay;
+             case "crafter-1gt-delay" -> LcsXNMCConfig.legacy.crafter1gtDelay;
+             case "parallel-activation-range" -> LcsXNMCConfig.parallelism.parallelActivationRange;

@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sun, 13 Sep 2026 16:30:09 +0800
+Subject: [PATCH] Round 2 console GUI: dark theme for RAM graph plot chrome
+
+
+diff --git a/src/main/java/com/destroystokyo/paper/gui/RAMGraph.java b/src/main/java/com/destroystokyo/paper/gui/RAMGraph.java
+index d9275ae196681d1116a117d0475604389a6c42ee..61e5b672f2fa8508bdba8dc08fcca06484e654dd 100644
+--- a/src/main/java/com/destroystokyo/paper/gui/RAMGraph.java
++++ b/src/main/java/com/destroystokyo/paper/gui/RAMGraph.java
+@@ -18,6 +18,16 @@ import java.util.LinkedList;
+ import java.util.concurrent.TimeUnit;
+ 
+ public class RAMGraph extends JComponent {
++    // Dark-theme palette matching MinecraftServerGui's Phase 6 theme. Hardcoded here (rather than
++    // imported) because this class lives in a different package (com.destroystokyo.paper.gui) and
++    // MinecraftServerGui's palette constants are private statics in net.minecraft.server.gui. Values
++    // are the same hex tone family as CONSOLE_BACKGROUND / BORDER_COLOR / MUTED_TEXT_COLOR so the graph
++    // reads as part of the same "console chrome" system as the toolbar/status bar bracketing the log.
++    private static final Color GRAPH_BACKGROUND_COLOR = new Color(0x12, 0x12, 0x15); // == CONSOLE_BACKGROUND
++    private static final Color GRAPH_GRID_COLOR = new Color(0x2C, 0x2C, 0x32); // subtle gridlines, between CONSOLE_BACKGROUND and BORDER_COLOR
++    private static final Color GRAPH_BORDER_COLOR = new Color(0x3A, 0x3A, 0x40); // == BORDER_COLOR
++    private static final Color GRAPH_GUIDE_COLOR = new Color(0x9A, 0x9A, 0xA2); // == MUTED_TEXT_COLOR
++
+     public static final LinkedList<GraphData> DATA = new LinkedList<GraphData>() {
+         @Override
+         public boolean add(GraphData data) {
+@@ -72,12 +82,9 @@ public class RAMGraph extends JComponent {
+         DATA.add(new GraphData(jvm.totalMemory(), jvm.freeMemory(), jvm.maxMemory()));
+ 
+         PointerInfo pointerInfo = null;
+-        // I think I recall spotting a bug report where this throw an exception once
+-        // not sure it's of concern here
+         try {
+             pointerInfo = MouseInfo.getPointerInfo();
+         } catch (NullPointerException | ArrayIndexOutOfBoundsException ignored) {
+-            // https://bugs.openjdk.org/browse/JDK-6840067
+         }
+         if (pointerInfo != null) {
+             Point point = pointerInfo.getLocation();
+@@ -97,10 +104,10 @@ public class RAMGraph extends JComponent {
+ 
+     @Override
+     public void paint(Graphics graphics) {
+-        graphics.setColor(new Color(0xFFFFFFFF));
++        graphics.setColor(GRAPH_BACKGROUND_COLOR);
+         graphics.fillRect(0, 0, 350, 100);
+ 
+-        graphics.setColor(new Color(0x888888));
++        graphics.setColor(GRAPH_GRID_COLOR);
+         graphics.drawLine(1, 25, 348, 25);
+         graphics.drawLine(1, 50, 348, 50);
+         graphics.drawLine(1, 75, 348, 75);
+@@ -109,7 +116,7 @@ public class RAMGraph extends JComponent {
+         for (GraphData data : DATA) {
+             i++;
+             if ((i + currentTick) % 120 == 0) {
+-                graphics.setColor(new Color(0x888888));
++                graphics.setColor(GRAPH_GRID_COLOR);
+                 graphics.drawLine(i, 1, i, 99);
+             }
+             int used = data.getUsedPercent();
+@@ -122,19 +129,18 @@ public class RAMGraph extends JComponent {
+             }
+         }
+ 
+-        graphics.setColor(new Color(0xFF000000));
++        graphics.setColor(GRAPH_BORDER_COLOR);
+         graphics.drawRect(0, 0, 348, 100);
+ 
+         Point m = null;
+         try {
+             m = getMousePosition();
+         } catch (NullPointerException ignored) {
+-            // https://bugs.openjdk.org/browse/JDK-6840067
+         }
+         if (m != null && m.x > 0 && m.x < 348 && m.y > 0 && m.y < 100) {
+             GraphData data = DATA.get(m.x);
+             int used = data.getUsedPercent();
+-            graphics.setColor(new Color(0x000000));
++            graphics.setColor(GRAPH_GUIDE_COLOR);
+             graphics.drawLine(m.x, 1, m.x, 99);
+             graphics.drawOval(m.x - 2, 100 - used - 2, 5, 5);
+             graphics.setColor(data.getLineColor());

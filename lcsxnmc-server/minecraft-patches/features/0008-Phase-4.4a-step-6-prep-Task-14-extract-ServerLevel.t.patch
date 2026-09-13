@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sun, 13 Sep 2026 14:46:17 +0800
+Subject: [PATCH] Phase 4.4a step 6 prep (Task #14): extract
+ ServerLevel.tickSingleThreaded, add dead tickRegionized branch
+
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 013e1ccf8ff7f1858ccce6b3d0915152d00016fe..90f8a9acd8f9adfe00027c3a75c559a3539111b3 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -795,7 +795,27 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         return previous;
+     }
+ 
++    // LcsXNMC start - region threading: Phase 4.4a step 6 prep (Task #14). tick(haveTime) is now a thin
++    // dispatcher; tickSingleThreaded(haveTime) is today's tick logic moved verbatim (no behavior change -
++    // diff against the old tick() body is a pure rename). tickRegionized(haveTime) is a placeholder for the
++    // real region-parallel tick loop and is unreachable while region-threading.enabled stays false (the
++    // only value shipped so far), so this refactor is a zero-behavior-change step.
+     public void tick(final BooleanSupplier haveTime) {
++        if (dev.lcsxnmc.server.LcsXNMCConfig.regionThreading.enabled) {
++            this.tickRegionized(haveTime);
++        } else {
++            this.tickSingleThreaded(haveTime);
++        }
++    }
++
++    private void tickRegionized(final BooleanSupplier haveTime) {
++        // Phase 4.4a step 6 (Task #14): real region-parallel ServerLevel.tick() integration is not
++        // implemented yet. This branch is unreachable today because region-threading.enabled defaults to
++        // false and nothing flips it to true in production.
++        throw new UnsupportedOperationException("region-threading.enabled=true is not supported yet (Phase 4.4a step 6 is not implemented)");
++    }
++
++    private void tickSingleThreaded(final BooleanSupplier haveTime) {
+         ProfilerFiller profiler = Profiler.get();
+         this.handlingTick = true;
+         this.environmentAttributes().invalidateTickCache();

@@ -6,10 +6,10 @@ Subject: [PATCH] Phase 4.4a step 6 prep (Task #14): extract
 
 
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 013e1ccf8ff7f1858ccce6b3d0915152d00016fe..90f8a9acd8f9adfe00027c3a75c559a3539111b3 100644
+index c29ace6a331e413db20a683dd6df591a91e8a88c..b1341de8eebefccc2ebab813a0ac3d787168b1ca 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -795,7 +795,27 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -801,7 +801,27 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
          return previous;
      }
  

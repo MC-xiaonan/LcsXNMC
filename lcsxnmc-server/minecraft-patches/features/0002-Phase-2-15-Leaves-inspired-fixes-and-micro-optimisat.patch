@@ -47,10 +47,10 @@ index 408cb996fc8ff77785da8919f19baff2cf4bd789..44ed34792c4375d3421707fb2f93533f
                      if (e instanceof ReportedException re && re.getCause() instanceof OutOfMemoryError) {
                          throw PacketUtils.makeReportedException(e, this.packet, this.listener);
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 59598bfb95c2f8a38efd92685c46a954dc76739d..013e1ccf8ff7f1858ccce6b3d0915152d00016fe 100644
+index 8389d812b2d80a122fd1945b3182c08cdeda7d1c..c29ace6a331e413db20a683dd6df591a91e8a88c 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -901,7 +901,26 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -908,7 +908,26 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
                                      }
  
                                      profiler.push("tick");
@@ -78,7 +78,7 @@ index 59598bfb95c2f8a38efd92685c46a954dc76739d..013e1ccf8ff7f1858ccce6b3d0915152
                                      profiler.pop();
                                  }
                              }
-@@ -998,7 +1017,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1006,7 +1025,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
                  // do not use a mutable pos, as some random tick implementations store the input without calling immutable()!
                  final BlockPos pos = new BlockPos((location & 15) | offsetX, ((location >>> (4 + 4)) & 15) | offsetY, ((location >>> 4) & 15) | offsetZ);
  
@@ -98,7 +98,7 @@ index 59598bfb95c2f8a38efd92685c46a954dc76739d..013e1ccf8ff7f1858ccce6b3d0915152
                  if (doubleTickFluids) {
                      final FluidState fluidState = state.getFluidState();
                      if (fluidState.isRandomlyTicking()) {
-@@ -1364,7 +1394,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1372,7 +1402,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
      private void tickBlock(final BlockPos pos, final Block type) {
          BlockState state = this.getBlockState(pos);
          if (state.is(type)) {
@@ -119,10 +119,10 @@ index 59598bfb95c2f8a38efd92685c46a954dc76739d..013e1ccf8ff7f1858ccce6b3d0915152
          // Paper start - rewrite chunk system
          if ((++this.tickedBlocksOrFluids & 7L) != 0L) {
 diff --git a/net/minecraft/server/level/ServerPlayerGameMode.java b/net/minecraft/server/level/ServerPlayerGameMode.java
-index 27bdb82793250b33b457fe027c003948000857c9..ce9fc498c06c8e34445fcbf5616492d8014873b6 100644
+index a901aa6547c52643d11249c201688341e2961f01..66473f76f213747451996ca43fc5852e14b68414 100644
 --- a/net/minecraft/server/level/ServerPlayerGameMode.java
 +++ b/net/minecraft/server/level/ServerPlayerGameMode.java
-@@ -393,6 +393,12 @@ public class ServerPlayerGameMode {
+@@ -419,6 +419,12 @@ public class ServerPlayerGameMode {
          org.bukkit.block.BlockState bState = bblock.getState();
          this.level.captureDrops = new java.util.ArrayList<>();
          // CraftBukkit end
@@ -135,7 +135,7 @@ index 27bdb82793250b33b457fe027c003948000857c9..ce9fc498c06c8e34445fcbf5616492d8
          BlockState adjustedState = block.playerWillDestroy(this.level, pos, state, this.player);
          boolean changed = this.level.removeBlock(pos, false);
          if (SharedConstants.DEBUG_BLOCK_BREAK) {
-@@ -435,6 +441,16 @@ public class ServerPlayerGameMode {
+@@ -461,6 +467,16 @@ public class ServerPlayerGameMode {
          }
          // Paper end - Trigger bee_nest_destroyed trigger in the correct place
          // CraftBukkit end
@@ -153,7 +153,7 @@ index 27bdb82793250b33b457fe027c003948000857c9..ce9fc498c06c8e34445fcbf5616492d8
          return true;
      }
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 3a4da514c163e7565fc241835db52c464a5c4734..d2e20d9f672dbf5f713b4c9119799f657fb624e3 100644
+index f332edbc4dad82cbdc02a58aa9ec21faf1f2db89..23428d3d7c454bf903540616adcd58a9e29b959a 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
 @@ -278,6 +278,11 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
@@ -168,7 +168,7 @@ index 3a4da514c163e7565fc241835db52c464a5c4734..d2e20d9f672dbf5f713b4c9119799f65
      private @Nullable DamageSource lastDamageSource;
      private long lastDamageStamp;
      protected int autoSpinAttackTicks;
-@@ -2156,22 +2161,40 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -2164,22 +2169,40 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      public boolean onClimbable() {
          if (this.isSpectator()) {
              return false;
@@ -301,10 +301,10 @@ index 7d3e843c2d3c5e15b7bea7302d6118419d3a4957..a0e9e4c62618a5c7ee2427bfe1ec4820
          BlockPos center = body.blockPosition();
          List<GlobalPos> jobSites = Lists.newArrayList();
 diff --git a/net/minecraft/world/item/BlockItem.java b/net/minecraft/world/item/BlockItem.java
-index b94c4f0a6908a37d8a07dba6ff3ece7193aca1b5..954af283e175a67140cb4700be7709b86eea9f8c 100644
+index 68f1e9483b93ef071877a4c99f4bd14e0d363145..78c4a31e8ccdb32da9327922c9a0622fd16e74c6 100644
 --- a/net/minecraft/world/item/BlockItem.java
 +++ b/net/minecraft/world/item/BlockItem.java
-@@ -92,7 +92,21 @@ public class BlockItem extends Item {
+@@ -100,7 +100,21 @@ public class BlockItem extends Item {
                  throw ex; // Rethrow exception if not placed by a player
              }
              // Paper end - Reset placed block on exception
@@ -328,7 +328,7 @@ index b94c4f0a6908a37d8a07dba6ff3ece7193aca1b5..954af283e175a67140cb4700be7709b8
              if (player != null && (this instanceof PlaceOnWaterBlockItem || this instanceof SolidBucketItem)) {
                  org.bukkit.event.block.BlockPlaceEvent placeEvent = org.bukkit.craftbukkit.event.CraftEventFactory.callBlockPlaceEvent((net.minecraft.server.level.ServerLevel) level, player, updatedPlaceContext.getHand(), previousState, pos);
 diff --git a/net/minecraft/world/item/ItemUtils.java b/net/minecraft/world/item/ItemUtils.java
-index cc266f88ea6d02e4bc1bb4299d83710559b0c535..e2c2d025db7621b37a4573f8c6a853c7021545a2 100644
+index beb13c435ad1b3b23fcc0f0d9a2fd37b1d3d1581..883d5a509605a71634881b92c49ab8ee7c3583db 100644
 --- a/net/minecraft/world/item/ItemUtils.java
 +++ b/net/minecraft/world/item/ItemUtils.java
 @@ -1,5 +1,6 @@
@@ -336,9 +336,9 @@ index cc266f88ea6d02e4bc1bb4299d83710559b0c535..e2c2d025db7621b37a4573f8c6a853c7
  
 +import java.util.List;
  import java.util.stream.Stream;
+ import net.minecraft.util.Prediction;
  import net.minecraft.world.InteractionHand;
- import net.minecraft.world.InteractionResult;
-@@ -44,6 +45,24 @@ public class ItemUtils {
+@@ -45,6 +46,24 @@ public class ItemUtils {
      public static void onContainerDestroyed(final ItemEntity container, final Stream<ItemStack> contents) {
          Level level = container.level();
          if (!level.isClientSide()) {
@@ -402,10 +402,10 @@ index 356a3a0dda09af007c3fbddfe360b38f4d7204ce..0d3c845bd1b167fbfbaf88870a87ef6d
              .map(resistance -> this.source.getBlockExplosionResistance(explosion, level, pos, block, fluid, resistance));
      }
 diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
-index 9286d9bcf3ec4069e77d3133f3d7bf29b2370c5a..f2fe4bf78e2b000d8d3a8de9b7757b5ddc579a50 100644
+index 21878bd770f6c0bc10dd0a67be5bd94d7e16f741..6a63125c2ff93347608c9280f12e8bb8c46d6a38 100644
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -1520,6 +1520,11 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+@@ -1521,6 +1521,11 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
      public <T extends Entity> void guardEntityTick(final Consumer<T> tick, final T entity) {
          try {
              tick.accept(entity);
@@ -449,10 +449,10 @@ index 5b3808e6ff58d350fe3fd65fb56e8f209e1b2c93..5ccbd72d152255911cb793aa09f65832
      }
  }
 diff --git a/net/minecraft/world/level/block/CopperBulbBlock.java b/net/minecraft/world/level/block/CopperBulbBlock.java
-index ebc44c7adf15ea8a67b4253a18eafe2c9eadb3e2..a2055bfe95accdd7bd49386215492284982eedc2 100644
+index 181b11733cee06c09592645e5043983300f22490..576dc614f73d882b133c222425ab5f609bfa3e6e 100644
 --- a/net/minecraft/world/level/block/CopperBulbBlock.java
 +++ b/net/minecraft/world/level/block/CopperBulbBlock.java
-@@ -6,6 +6,7 @@ import net.minecraft.core.Direction;
+@@ -5,6 +5,7 @@ import net.minecraft.core.Direction;
  import net.minecraft.server.level.ServerLevel;
  import net.minecraft.sounds.SoundEvents;
  import net.minecraft.sounds.SoundSource;
@@ -460,7 +460,7 @@ index ebc44c7adf15ea8a67b4253a18eafe2c9eadb3e2..a2055bfe95accdd7bd49386215492284
  import net.minecraft.world.level.Level;
  import net.minecraft.world.level.block.state.BlockBehaviour;
  import net.minecraft.world.level.block.state.BlockState;
-@@ -30,9 +31,18 @@ public class CopperBulbBlock extends Block {
+@@ -23,9 +24,18 @@ public class CopperBulbBlock extends Block {
          this.registerDefaultState(this.defaultBlockState().setValue(LIT, false).setValue(POWERED, false));
      }
  
@@ -479,7 +479,7 @@ index ebc44c7adf15ea8a67b4253a18eafe2c9eadb3e2..a2055bfe95accdd7bd49386215492284
              this.checkAndFlip(state, serverLevel, pos);
          }
      }
-@@ -42,10 +52,23 @@ public class CopperBulbBlock extends Block {
+@@ -35,10 +45,23 @@ public class CopperBulbBlock extends Block {
          final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
      ) {
          if (level instanceof ServerLevel serverLevel) {
@@ -504,10 +504,10 @@ index ebc44c7adf15ea8a67b4253a18eafe2c9eadb3e2..a2055bfe95accdd7bd49386215492284
          boolean signal = level.hasNeighborSignal(pos);
          if (signal != state.getValue(POWERED)) {
 diff --git a/net/minecraft/world/level/block/CrafterBlock.java b/net/minecraft/world/level/block/CrafterBlock.java
-index f0756f3d277103f95e4d5213b5ae788025b72f42..4889a15ddbb5266046c49f136b7a98045f6896be 100644
+index 35aafd51eb16a317c0fda06a7186d59cb263de30..e7a6627e2a1dbb43097df7b183b97c3bcb654c1d 100644
 --- a/net/minecraft/world/level/block/CrafterBlock.java
 +++ b/net/minecraft/world/level/block/CrafterBlock.java
-@@ -47,6 +47,8 @@ public class CrafterBlock extends BaseEntityBlock {
+@@ -45,6 +45,8 @@ public class CrafterBlock extends BaseEntityBlock {
      private static final EnumProperty<FrontAndTop> ORIENTATION = BlockStateProperties.ORIENTATION;
      private static final int MAX_CRAFTING_TICKS = 6;
      private static final int CRAFTING_TICK_DELAY = 4;
@@ -516,7 +516,7 @@ index f0756f3d277103f95e4d5213b5ae788025b72f42..4889a15ddbb5266046c49f136b7a9804
      private static final RecipeCache RECIPE_CACHE = new RecipeCache(10);
      private static final int CRAFTER_ADVANCEMENT_DIAMETER = 17;
  
-@@ -78,7 +80,7 @@ public class CrafterBlock extends BaseEntityBlock {
+@@ -71,7 +73,7 @@ public class CrafterBlock extends BaseEntityBlock {
          boolean isTriggered = state.getValue(TRIGGERED);
          BlockEntity blockEntity = level.getBlockEntity(pos);
          if (shouldTrigger && !isTriggered) {
@@ -525,7 +525,7 @@ index f0756f3d277103f95e4d5213b5ae788025b72f42..4889a15ddbb5266046c49f136b7a9804
              level.setBlock(pos, state.setValue(TRIGGERED, true), Block.UPDATE_CLIENTS);
              this.setBlockEntityTriggered(blockEntity, true);
          } else if (!shouldTrigger && isTriggered) {
-@@ -127,10 +129,16 @@ public class CrafterBlock extends BaseEntityBlock {
+@@ -120,10 +122,16 @@ public class CrafterBlock extends BaseEntityBlock {
      @Override
      public void setPlacedBy(final Level level, final BlockPos pos, final BlockState state, final @Nullable LivingEntity by, final ItemStack itemStack) {
          if (state.getValue(TRIGGERED)) {
@@ -544,10 +544,10 @@ index f0756f3d277103f95e4d5213b5ae788025b72f42..4889a15ddbb5266046c49f136b7a9804
      protected void affectNeighborsAfterRemoval(final BlockState state, final ServerLevel level, final BlockPos pos, final boolean movedByPiston) {
          Containers.updateNeighboursAfterDestroy(state, level, pos);
 diff --git a/net/minecraft/world/level/block/SculkSensorBlock.java b/net/minecraft/world/level/block/SculkSensorBlock.java
-index 10cff0f9db2910c543c20fa055c0c5b759becc15..a810c0ad02e415b144e6bbfdd5fb0c31b117ae6f 100644
+index 6e217dea06365d2125b51b8222f49e186fcf6c08..4727d171f4d25f1b255be33175a63d1b7516131a 100644
 --- a/net/minecraft/world/level/block/SculkSensorBlock.java
 +++ b/net/minecraft/world/level/block/SculkSensorBlock.java
-@@ -227,10 +227,25 @@ public class SculkSensorBlock extends BaseEntityBlock implements SimpleWaterlogg
+@@ -220,10 +220,25 @@ public class SculkSensorBlock extends BaseEntityBlock implements SimpleWaterlogg
          final @Nullable Entity sourceEntity,
          final Level level,
          final BlockPos pos,
@@ -575,10 +575,10 @@ index 10cff0f9db2910c543c20fa055c0c5b759becc15..a810c0ad02e415b144e6bbfdd5fb0c31
          calculatedPower = org.bukkit.craftbukkit.event.CraftEventFactory.callRedstoneChange(level, pos, state.getValue(POWER), calculatedPower).getNewCurrent();
          if (calculatedPower == 0) {
 diff --git a/net/minecraft/world/level/block/ShelfBlock.java b/net/minecraft/world/level/block/ShelfBlock.java
-index 8a1313a10b6afeee86ea2245da4bd9beb28d1d84..44ff815323ee3716c89bc73bc73f7c0768958420 100644
+index 683e94d86b1e0eb0a287608270ec8e36cdef6ae3..398c57cbddf62c9b3d8360934af0650d2c6614cc 100644
 --- a/net/minecraft/world/level/block/ShelfBlock.java
 +++ b/net/minecraft/world/level/block/ShelfBlock.java
-@@ -232,7 +232,20 @@ public class ShelfBlock extends BaseEntityBlock implements SelectableSlotContain
+@@ -225,7 +225,20 @@ public class ShelfBlock extends BaseEntityBlock implements SelectableSlotContain
          boolean anySwapped = false;
  
          for (int shelfPartIndex = 0; shelfPartIndex < connectedBlocks.size(); shelfPartIndex++) {

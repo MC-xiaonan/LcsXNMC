@@ -13,10 +13,10 @@ check. No RegionWorkerThread exists yet, so this is zero behavior
 change today.
 
 diff --git a/net/minecraft/commands/Commands.java b/net/minecraft/commands/Commands.java
-index c4396509584011a5bbc171510478e8e62ce44d94..e14723a0260b6818717ec18159f204c27eeba584 100644
+index fb816ac65e382eac207afd56185a73c440c6245a..078af0cac108882c05bf77b847dd2dd588728c54 100644
 --- a/net/minecraft/commands/Commands.java
 +++ b/net/minecraft/commands/Commands.java
-@@ -368,6 +368,16 @@ public class Commands {
+@@ -372,6 +372,16 @@ public class Commands {
  
      public void performCommand(final ParseResults<CommandSourceStack> command, final String commandString, final boolean throwCommandError) {
          org.spigotmc.AsyncCatcher.catchOp("Cannot perform command async");

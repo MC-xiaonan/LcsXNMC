@@ -6,12 +6,12 @@ Subject: [PATCH] Phase 4.4a step 5: concurrency hardening (Task #13) -
 
 
 diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
-index 7e9361407042ddaabe3f66ee8957ae84b6ef2317..c6642539a5186da7e477041eb8f6251324257b4b 100644
+index 3ed912fb19e1dfda7987fcf4b504aff5abccc46c..51d071ae6babfa96522e92dc5181276f4269009a 100644
 --- a/net/minecraft/server/level/ChunkMap.java
 +++ b/net/minecraft/server/level/ChunkMap.java
-@@ -139,7 +139,9 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -138,7 +138,9 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     private final ChunkStatusUpdateListener chunkStatusListener;
      private final ChunkMap.DistanceManager distanceManager;
-     private final String storageName;
      private final PlayerMap playerMap = new PlayerMap();
 -    public final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectOpenHashMap<>();
 +    // LcsXNMC start - region threading: cross-region reads of this map are the norm (Phase 4.4a Task #13), synchronize it

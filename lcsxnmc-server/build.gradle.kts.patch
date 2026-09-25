@@ -1,6 +1,6 @@
 --- a/paper-server/build.gradle.kts
 +++ b/paper-server/build.gradle.kts
-@@ -20,8 +_,21 @@
+@@ -20,10 +_,23 @@
  
  paperweight {
      minecraftVersion = providers.gradleProperty("mcVersion")
@@ -20,8 +20,11 @@
 +
 +
      updatingMinecraft {
-         // oldPaperCommit = "d4fe85375af18bfa88f44d7c1e6a61904ae550cc"
+-        //oldPaperCommit = "e5fe71723e2ffde7cc9fafc085ac3bb73e63175e"
++        oldPaperCommit = "5d4f9bd0e4f6b1ef70d07feb411580cef7d1a746"
      }
+ }
+ 
 @@ -86,7 +_,19 @@
      }
  }
@@ -49,7 +52,7 @@
  dependencies {
 -    implementation(project(":paper-api"))
 +    implementation(project(":lcsxnmc-api"))
-     implementation("ca.spottedleaf:leafpile:1.2.0")
+     implementation("ca.spottedleaf:leafpile:1.2.2")
      implementation("org.jline:jline-terminal-ffm:3.27.1") // use ffm on java 22+
      implementation("org.jline:jline-terminal-jni:3.27.1") // fall back to jni on java 21
 @@ -171,14 +_,14 @@
@@ -80,7 +83,7 @@
  idea {
      module {
          generatedSourceDirs.add(generatedDir.toFile())
-@@ -327,7 +_,7 @@
+@@ -328,7 +_,7 @@
  }
  
  fill {

@@ -83,10 +83,10 @@ index 69cdd304d255d52c9b7dc9b6a33ffdb630b79abe..8f84666e03298cc7a83058c14687c9d8
          return false;
      }
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-index 570bfa73e94fd3b1c16cab1bdc338c0cd2cc2300..1c07100b584516b18d36055812a141e66814a48a 100644
+index 0b5549a334a58553e74b685a976ccc334a55fb5c..9caf3dee5f2a54f1b2d825b7e4dba67f73f2d5e6 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-@@ -383,7 +383,7 @@ public final class CraftServer implements Server {
+@@ -385,7 +385,7 @@ public final class CraftServer implements Server {
  
      @Override
      public final boolean isGlobalTickThread() {
@@ -95,7 +95,7 @@ index 570bfa73e94fd3b1c16cab1bdc338c0cd2cc2300..1c07100b584516b18d36055812a141e6
      }
      // Paper end - Folia reagion threading API
  
-@@ -2307,7 +2307,7 @@ public final class CraftServer implements Server {
+@@ -2296,7 +2296,7 @@ public final class CraftServer implements Server {
  
      @Override
      public boolean isPrimaryThread() {

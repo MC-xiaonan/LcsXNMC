@@ -1,0 +1,267 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 25 Sep 2026 21:07:11 +0800
+Subject: [PATCH] Fix checkstyle violations in legacy behavior provider
+ framework and FeatureManager API
+
+Migrate from org.jetbrains.annotations to JSpecify (@NullMarked packages),
+add missing package-info.java files and Javadoc, fix annotation placement,
+and rename getLcsXNMCVersion to getLcsXnmcVersion to satisfy the
+abbreviation-length check.
+
+diff --git a/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorEvent.java b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorEvent.java
+index 19ed52bb8256dbe2bee88cdd2c28651c2491414a..1124602fa644bf9ce4ca5da5918ebe3ece0bf9b1 100644
+--- a/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorEvent.java
++++ b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorEvent.java
+@@ -5,8 +5,7 @@ import java.util.Map;
+ import org.bukkit.event.Cancellable;
+ import org.bukkit.event.Event;
+ import org.bukkit.event.HandlerList;
+-import org.jetbrains.annotations.NotNull;
+-import org.jetbrains.annotations.Nullable;
++import org.jspecify.annotations.Nullable;
+ 
+ /**
+  * Fired at a stable engine point where LcsXNMC's target Minecraft version
+@@ -29,7 +28,13 @@ public final class LegacyBehaviorEvent extends Event implements Cancellable {
+     private final Map<String, Object> context;
+     private boolean cancelled;
+ 
+-    public LegacyBehaviorEvent(@NotNull String key, @NotNull Map<String, Object> context) {
++    /**
++     * Creates a new legacy behavior event.
++     *
++     * @param key     the behavior key
++     * @param context the context data describing the situation the behavior fired in
++     */
++    public LegacyBehaviorEvent(String key, Map<String, Object> context) {
+         this.key = key;
+         this.context = Collections.unmodifiableMap(context);
+     }
+@@ -40,7 +45,6 @@ public final class LegacyBehaviorEvent extends Event implements Cancellable {
+      *
+      * @return the behavior key
+      */
+-    @NotNull
+     public String getKey() {
+         return this.key;
+     }
+@@ -52,13 +56,17 @@ public final class LegacyBehaviorEvent extends Event implements Cancellable {
+      *
+      * @return the context map
+      */
+-    @NotNull
+     public Map<String, Object> getContext() {
+         return this.context;
+     }
+ 
+-    @Nullable
+-    public Object getContext(@NotNull String contextKey) {
++    /**
++     * Looks up a single entry from {@link #getContext()}.
++     *
++     * @param contextKey the context map key
++     * @return the value, or null if absent
++     */
++    public @Nullable Object getContext(String contextKey) {
+         return this.context.get(contextKey);
+     }
+ 
+@@ -76,13 +84,16 @@ public final class LegacyBehaviorEvent extends Event implements Cancellable {
+         this.cancelled = cancel;
+     }
+ 
+-    @NotNull
+     @Override
+     public HandlerList getHandlers() {
+         return HANDLERS;
+     }
+ 
+-    @NotNull
++    /**
++     * Gets the handler list for this event, as required by the Bukkit event system.
++     *
++     * @return the handler list
++     */
+     public static HandlerList getHandlerList() {
+         return HANDLERS;
+     }
+diff --git a/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorProvider.java b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorProvider.java
+index 612c80bdb9fac013fc277fe3ec81dc979a1be39f..b2496621228fa6be4146d0cb95040feca5624b2d 100644
+--- a/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorProvider.java
++++ b/src/main/java/dev/lcsxnmc/api/legacy/LegacyBehaviorProvider.java
+@@ -1,8 +1,7 @@
+ package dev.lcsxnmc.api.legacy;
+ 
+ import java.util.Set;
+-import org.jetbrains.annotations.NotNull;
+-import org.jetbrains.annotations.Nullable;
++import org.jspecify.annotations.Nullable;
+ 
+ /**
+  * A self-declared "repair plugin" capability descriptor: a statement of which
+@@ -25,7 +24,6 @@ public interface LegacyBehaviorProvider {
+      *
+      * @return the provider id
+      */
+-    @NotNull
+     String getId();
+ 
+     /**
+@@ -33,7 +31,6 @@ public interface LegacyBehaviorProvider {
+      *
+      * @return the description
+      */
+-    @NotNull
+     String getDescription();
+ 
+     /**
+@@ -41,7 +38,6 @@ public interface LegacyBehaviorProvider {
+      *
+      * @return an immutable set of supported behavior keys
+      */
+-    @NotNull
+     Set<String> getSupportedKeys();
+ 
+     /**
+@@ -53,8 +49,7 @@ public interface LegacyBehaviorProvider {
+      *
+      * @return the config section instance, or null
+      */
+-    @Nullable
+-    default Object getConfigSection() {
++    default @Nullable Object getConfigSection() {
+         return null;
+     }
+ }
+diff --git a/src/main/java/dev/lcsxnmc/api/legacy/package-info.java b/src/main/java/dev/lcsxnmc/api/legacy/package-info.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..866334f8b7412514321e9ddb44410d7732b43d16
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/legacy/package-info.java
+@@ -0,0 +1,8 @@
++/**
++ * Classes for the legacy behavior restoration framework: {@link dev.lcsxnmc.api.legacy.LegacyBehaviorEvent}
++ * and {@link dev.lcsxnmc.api.legacy.LegacyBehaviorProvider}.
++ */
++@NullMarked
++package dev.lcsxnmc.api.legacy;
++
++import org.jspecify.annotations.NullMarked;
+diff --git a/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java b/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
+index 8f19ef7bde34c50337c3ad805cab76f9d09cb9d4..ef48df73e87d272326873310d9ed7c87baa32990 100644
+--- a/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
++++ b/src/main/java/dev/lcsxnmc/api/plugin/FeatureManager.java
+@@ -2,7 +2,6 @@ package dev.lcsxnmc.api.plugin;
+ 
+ import dev.lcsxnmc.api.legacy.LegacyBehaviorProvider;
+ import java.util.Set;
+-import org.jetbrains.annotations.NotNull;
+ 
+ /**
+  * Lets plugins query which LcsXNMC features are currently enabled on this server.
+@@ -19,7 +18,7 @@ public interface FeatureManager {
+      * @param key the feature key, e.g. {@code "debug-logging"}
+      * @return true if the feature is enabled
+      */
+-    boolean isFeatureEnabled(@NotNull String key);
++    boolean isFeatureEnabled(String key);
+ 
+     /**
+      * Gets the keys of every feature LcsXNMC knows about, regardless of whether
+@@ -27,7 +26,6 @@ public interface FeatureManager {
+      *
+      * @return an immutable set of known feature keys
+      */
+-    @NotNull
+     Set<String> getKnownFeatures();
+ 
+     /**
+@@ -35,7 +33,6 @@ public interface FeatureManager {
+      *
+      * @return an immutable set of enabled feature keys
+      */
+-    @NotNull
+     Set<String> getEnabledFeatures();
+ 
+     /**
+@@ -43,8 +40,7 @@ public interface FeatureManager {
+      *
+      * @return the LcsXNMC version string
+      */
+-    @NotNull
+-    String getLcsXNMCVersion();
++    String getLcsXnmcVersion();
+ 
+     /**
+      * Registers a "repair plugin" capability descriptor. Idempotent: registering
+@@ -52,7 +48,7 @@ public interface FeatureManager {
+      *
+      * @param provider the provider to register
+      */
+-    void registerProvider(@NotNull LegacyBehaviorProvider provider);
++    void registerProvider(LegacyBehaviorProvider provider);
+ 
+     /**
+      * Unregisters a previously-registered provider. Does nothing if it was
+@@ -60,13 +56,12 @@ public interface FeatureManager {
+      *
+      * @param provider the provider to unregister
+      */
+-    void unregisterProvider(@NotNull LegacyBehaviorProvider provider);
++    void unregisterProvider(LegacyBehaviorProvider provider);
+ 
+     /**
+      * Gets every currently-registered {@link LegacyBehaviorProvider}.
+      *
+      * @return an immutable view of the registered providers
+      */
+-    @NotNull
+     Set<LegacyBehaviorProvider> getRegisteredProviders();
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/java/dev/lcsxnmc/api/plugin/Features.java b/src/main/java/dev/lcsxnmc/api/plugin/Features.java
+index 7aeb977c24f09e48205a8c7de31d64d0dfeeff9f..ac2e68cd5597eca7b53fcf25eba4766c88cee4bc 100644
+--- a/src/main/java/dev/lcsxnmc/api/plugin/Features.java
++++ b/src/main/java/dev/lcsxnmc/api/plugin/Features.java
+@@ -1,7 +1,6 @@
+ package dev.lcsxnmc.api.plugin;
+ 
+ import org.bukkit.Bukkit;
+-import org.jetbrains.annotations.NotNull;
+ 
+ /**
+  * Static convenience accessors for {@link FeatureManager}, mirroring the
+@@ -17,7 +16,6 @@ public final class Features {
+      *
+      * @return the feature manager
+      */
+-    @NotNull
+     public static FeatureManager manager() {
+         return Bukkit.getServer().getFeatureManager();
+     }
+@@ -28,7 +26,7 @@ public final class Features {
+      * @param key the feature key
+      * @return true if the feature is enabled
+      */
+-    public static boolean isEnabled(@NotNull String key) {
++    public static boolean isEnabled(String key) {
+         return manager().isFeatureEnabled(key);
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/java/dev/lcsxnmc/api/plugin/package-info.java b/src/main/java/dev/lcsxnmc/api/plugin/package-info.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..82ce9abeec48ce8375bd5e53548131732c86fb26
+--- /dev/null
++++ b/src/main/java/dev/lcsxnmc/api/plugin/package-info.java
+@@ -0,0 +1,7 @@
++/**
++ * Classes letting plugins query which LcsXNMC features are enabled on this server.
++ */
++@NullMarked
++package dev.lcsxnmc.api.plugin;
++
++import org.jspecify.annotations.NullMarked;

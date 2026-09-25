@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Fri, 25 Sep 2026 21:18:11 +0800
+Subject: [PATCH] Fix NPE in TickThreadRegionTest by stubbing mock
+ Level.dimension()
+
+RegionWorkerThread's constructor names the thread via WorldUtil.getWorldName(level),
+which dereferences dimension(). The bare Mockito.mock(Level.class) used by
+regionWorkerChunkCheckFailsAcrossDifferentWorlds() left dimension() unstubbed,
+returning null and NPEing in MCUtil.getLevelName. This was never caught before
+because the full test suite had not previously been run via ./gradlew build.
+
+diff --git a/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java b/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java
+index abd72e3d11638ba45c61a17709c64501b2fe39e0..705bb2bd9b0e405440bf10c9fcedc8bd177464c9 100644
+--- a/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java
++++ b/src/test/java/ca/spottedleaf/moonrise/common/util/TickThreadRegionTest.java
+@@ -87,8 +87,8 @@ public class TickThreadRegionTest {
+ 
+     @Test
+     public void regionWorkerChunkCheckFailsAcrossDifferentWorlds() throws InterruptedException {
+-        final Level worldA = fakeLevel();
+-        final Level worldB = fakeLevel();
++        final Level worldA = fakeLevel(Level.OVERWORLD);
++        final Level worldB = fakeLevel(Level.NETHER);
+         final Throwable[] failure = new Throwable[1];
+         final TickRegion region = regionOf(2L, worldA, CoordinateUtils.getChunkKey(0, 0));
+         final RegionWorkerThread[] workerHolder = new RegionWorkerThread[1];
+@@ -186,9 +186,12 @@ public class TickThreadRegionTest {
+         assertNoFailure(globalFailure);
+     }
+ 
+-    private static Level fakeLevel() {
+-        // identity is all that matters here - isTickThreadFor only ever compares world
+-        // references with ==, it never dereferences the Level itself for these checks
+-        return Mockito.mock(Level.class);
++    private static Level fakeLevel(final net.minecraft.resources.ResourceKey<Level> dimension) {
++        // identity is all that matters for isTickThreadFor's own checks - it only ever compares
++        // world references with ==. But RegionWorkerThread's constructor names the thread using
++        // WorldUtil.getWorldName(level), which does dereference dimension(), so the mock needs it stubbed.
++        final Level level = Mockito.mock(Level.class);
++        Mockito.when(level.dimension()).thenReturn(dimension);
++        return level;
+     }
+ }

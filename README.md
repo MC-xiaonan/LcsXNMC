@@ -2,7 +2,7 @@
 
 一个基于 [PaperMC](https://papermc.io/)（`paperweight-patcher`/`paperweight-core` 分支机制）的定制 Minecraft Java 版服务端，目标是融合 Bukkit / Paper / Leaves / Folia 生态的 API 能力，并提供一套自研的 **LcsXNMC API**，在不破坏现有 Paper/Bukkit 插件兼容性的前提下扩展服务端能力。
 
-- Minecraft 版本：`26.2`
+- Minecraft 版本：`26.3`
 - 构建方式：Gradle + paperweight（与 Paper 官方分支结构一致，源码以补丁（patch）形式维护在 `paper-patches/` / `minecraft-patches/` 下）
 - 许可证：继承自上游 Paper/Spigot/Bukkit/CraftBukkit，[GNU GPL v3](licenses/GPL.md)，详见 [LICENSE.md](LICENSE.md)
 
@@ -32,7 +32,7 @@ paper-server/         # (生成目录，由补丁应用生成，已加入 .gitig
 
 ## 构建
 
-需要 JDK 21（Gradle 工具链）。
+构建和运行需要 JDK 25。
 
 ```bash
 ./gradlew createPaperclipJar

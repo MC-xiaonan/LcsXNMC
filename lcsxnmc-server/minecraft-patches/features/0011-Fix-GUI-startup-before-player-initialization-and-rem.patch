@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 26 Sep 2026 15:18:18 +0800
+Subject: [PATCH] Fix GUI startup before player initialization and remove Paper
+ update prompts
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index c3bf41af0273e902f881cc070fcef6dd64abb063..2c8c983753c293acb05011dbcd09df1b072244bc 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1272,17 +1272,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             // Paper start - Add onboarding message for initial server start
+             if (io.papermc.paper.configuration.GlobalConfiguration.isFirstStart) {
+                 LOGGER.info("*************************************************************************************");
+-                LOGGER.info("This is the first time you're starting this server.");
+-                LOGGER.info("It's recommended you read our 'Getting Started' documentation for guidance.");
+-                LOGGER.info("View this and more helpful information here: https://docs.papermc.io/paper/next-steps");
++                LOGGER.info("This is the first time you're starting LcsXNMC.");
++                LOGGER.info("For setup guidance and project information, visit:");
++                LOGGER.info("https://github.com/MC-xiaonan/LcsXNMC");
+                 LOGGER.info("*************************************************************************************");
+             }
+             // Paper end - Add onboarding message for initial server start
+-            // Paper start - Improve outdated version checking
+-            if (System.getProperty("paper.disableStartupVersionCheck") == null && io.papermc.paper.configuration.GlobalConfiguration.get().updateChecker.enabled) {
+-                CompletableFuture.runAsync(com.destroystokyo.paper.PaperVersionFetcher::getUpdateStatusStartupMessage, io.papermc.paper.util.MCUtil.ASYNC_EXECUTOR);
+-            }
+-            // Paper end - Improve outdated version checking
+ 
+             while (this.running) {
+                 final long tickStart = System.nanoTime(); // Paper - improve tick loop
+diff --git a/net/minecraft/server/gui/MinecraftServerGui.java b/net/minecraft/server/gui/MinecraftServerGui.java
+index d9fefb569c17bc5d95b29057eb291d7a19f0544b..f909e1ee9aac3f5c720801cf23f203d09c98ef5a 100644
+--- a/net/minecraft/server/gui/MinecraftServerGui.java
++++ b/net/minecraft/server/gui/MinecraftServerGui.java
+@@ -67,8 +67,8 @@ public class MinecraftServerGui extends JComponent {
+ 
+     private static final Font MONOSPACED = resolveMonospaceFont(Font.PLAIN, 12);
+     private static final Logger LOGGER = LogUtils.getLogger();
+-    private static final String TITLE = "Minecraft server";
+-    private static final String SHUTDOWN_TITLE = "Minecraft server - shutting down!";
++    private static final String TITLE = "LcsXNMC server";
++    private static final String SHUTDOWN_TITLE = "LcsXNMC server - shutting down!";
+     private final DedicatedServer server;
+     private final long startTimeMillis = System.currentTimeMillis();
+     private Thread logAppenderThread;
+@@ -83,7 +83,7 @@ public class MinecraftServerGui extends JComponent {
+         }
+         applyDarkUiDefaults();
+ 
+-        final JFrame frame = new JFrame("Minecraft server");
++        final JFrame frame = new JFrame(TITLE);
+         final MinecraftServerGui gui = new MinecraftServerGui(server);
+         frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+         frame.getContentPane().setBackground(BACKGROUND);
+@@ -91,7 +91,7 @@ public class MinecraftServerGui extends JComponent {
+         frame.pack();
+         frame.setLocationRelativeTo(null);
+         frame.setVisible(true);
+-        frame.setName("Minecraft server");
++        frame.setName(TITLE);
+         try {
+             frame.setIconImage(javax.imageio.ImageIO.read(java.util.Objects.requireNonNull(MinecraftServerGui.class.getClassLoader().getResourceAsStream("logo.png"))));
+         } catch (java.io.IOException ignore) {
+@@ -100,7 +100,7 @@ public class MinecraftServerGui extends JComponent {
+             @Override
+             public void windowClosing(final WindowEvent event) {
+                 if (!gui.isClosing.getAndSet(true)) {
+-                    frame.setTitle("Minecraft server - shutting down!");
++                    frame.setTitle(SHUTDOWN_TITLE);
+                     server.halt(true);
+                     gui.runFinalizers();
+                 }
+@@ -384,7 +384,10 @@ public class MinecraftServerGui extends JComponent {
+             tpsLabel.setForeground(ERROR_COLOR);
+         }
+ 
+-        playersLabel.setText("Players: " + this.server.getPlayerCount() + "/" + this.server.getMaxPlayers());
++        final var players = this.server.getPlayerList();
++        playersLabel.setText(players == null
++            ? "Players: starting..."
++            : "Players: " + players.getPlayerCount() + "/" + this.server.getMaxPlayers());
+     }
+ 
+     private JComponent buildInfoPanel() {
+@@ -627,13 +630,13 @@ public class MinecraftServerGui extends JComponent {
+     }
+ 
+     private JComponent buildOnboardingPanel() {
+-        String onboardingLink = "https://docs.papermc.io/paper/next-steps";
++        String onboardingLink = "https://github.com/MC-xiaonan/LcsXNMC";
+         JPanel jPanel = new JPanel();
+         jPanel.setBackground(PANEL_BACKGROUND);
+         jPanel.setBorder(new javax.swing.border.CompoundBorder(
+             new javax.swing.border.MatteBorder(0, 0, 1, 0, BORDER_COLOR), new javax.swing.border.EmptyBorder(8, 10, 8, 10)));
+ 
+-        javax.swing.JLabel jLabel = new javax.swing.JLabel("If you need help setting up your server you can visit:");
++        javax.swing.JLabel jLabel = new javax.swing.JLabel("LcsXNMC help and project information:");
+         jLabel.setFont(MinecraftServerGui.MONOSPACED);
+         jLabel.setForeground(MUTED_TEXT_COLOR);
+ 

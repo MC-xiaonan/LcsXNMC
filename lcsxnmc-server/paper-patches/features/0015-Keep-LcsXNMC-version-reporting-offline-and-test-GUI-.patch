@@ -1,0 +1,499 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC-xiaonan <2106104879@qq.com>
+Date: Sat, 26 Sep 2026 15:18:19 +0800
+Subject: [PATCH] Keep LcsXNMC version reporting offline and test GUI startup
+ regression
+
+
+diff --git a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+index ba32d58c33c65b1384baa7616da64f7a4a1f0d1d..1ca0bfcbb7c2c0f118bda64a570f4e67b4e05436 100644
+--- a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
++++ b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+@@ -1,50 +1,19 @@
+ package com.destroystokyo.paper;
+ 
+ import com.destroystokyo.paper.util.VersionFetcher;
+-import com.google.gson.Gson;
+-import com.google.gson.JsonArray;
+-import com.google.gson.JsonElement;
+-import com.google.gson.JsonObject;
+-import com.google.gson.JsonSyntaxException;
+-import com.mojang.logging.LogUtils;
+-import io.papermc.paper.ServerBuildInfo;
+-import java.io.BufferedReader;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-import java.net.HttpURLConnection;
+-import java.net.URI;
+-import java.net.URL;
+-import java.nio.charset.StandardCharsets;
+-import java.util.Optional;
+-import java.util.OptionalInt;
+-import java.util.stream.StreamSupport;
+ import net.kyori.adventure.text.Component;
+-import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
+ import net.kyori.adventure.text.event.ClickEvent;
+ import net.kyori.adventure.text.format.NamedTextColor;
+ import net.kyori.adventure.text.format.TextDecoration;
+ import org.checkerframework.checker.nullness.qual.NonNull;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+ import org.checkerframework.framework.qual.DefaultQualifier;
+-import org.apache.logging.log4j.LogManager;
+-import org.slf4j.Logger;
+-import java.util.List;
+ 
+ import static net.kyori.adventure.text.Component.text;
+-import static net.kyori.adventure.text.format.TextColor.color;
+-import static io.papermc.paper.ServerBuildInfo.StringRepresentation.VERSION_SIMPLE;
+ 
+ @DefaultQualifier(NonNull.class)
+ public class PaperVersionFetcher implements VersionFetcher {
+-    private static final Logger LOGGER = LogUtils.getClassLogger();
+-    private static final ComponentLogger COMPONENT_LOGGER = ComponentLogger.logger(LogManager.getRootLogger().getName());
+-    private static final int DISTANCE_ERROR = -1;
+-    private static final int DISTANCE_UNKNOWN = -2;
+-    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/paper";
+-    private static final String REPOSITORY = "PaperMC/Paper";
+-    private static final ServerBuildInfo BUILD_INFO = ServerBuildInfo.buildInfo();
+-    private static final String USER_AGENT = BUILD_INFO.brandName() + "/" + BUILD_INFO.asString(VERSION_SIMPLE) + " (https://papermc.io)";
+-    private static final Gson GSON = new Gson();
++    private static final String DOWNLOAD_PAGE = "https://github.com/MC-xiaonan/LcsXNMC/releases";
+ 
+     @Override
+     public long getCacheTime() {
+@@ -53,201 +22,14 @@ public class PaperVersionFetcher implements VersionFetcher {
+ 
+     @Override
+     public Component getVersionMessage() {
+-        final Component updateMessage;
+-        if (BUILD_INFO.buildNumber().isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
+-            updateMessage = text("You are running a development version without access to version information", color(0xFF5300));
+-        } else {
+-            updateMessage = getUpdateStatusMessage();
+-        }
++        final Component message = text("Automatic update checking is disabled for LcsXNMC.", NamedTextColor.GRAY)
++            .append(Component.newline())
++            .append(text("LcsXNMC releases: ", NamedTextColor.GRAY))
++            .append(text(DOWNLOAD_PAGE, NamedTextColor.GOLD)
++                .hoverEvent(text("Click to open", NamedTextColor.WHITE))
++                .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE)));
+         final @Nullable Component history = this.getHistory();
+-
+-        return history != null ? Component.textOfChildren(updateMessage, Component.newline(), history) : updateMessage;
+-    }
+-
+-    public static void getUpdateStatusStartupMessage() {
+-        int distance = DISTANCE_ERROR;
+-
+-        final OptionalInt buildNumber = BUILD_INFO.buildNumber();
+-        if (buildNumber.isEmpty() && BUILD_INFO.gitCommit().isEmpty()) {
+-            COMPONENT_LOGGER.warn(text("*** You are running a development version without access to version information ***"));
+-        } else {
+-            final Optional<MinecraftVersionFetcher> apiResult = fetchMinecraftVersionList();
+-            if (buildNumber.isPresent()) {
+-                distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
+-            } else {
+-                final Optional<String> gitBranch = BUILD_INFO.gitBranch();
+-                final Optional<String> gitCommit = BUILD_INFO.gitCommit();
+-                if (gitBranch.isPresent() && gitCommit.isPresent()) {
+-                    distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
+-                }
+-            }
+-
+-            switch (distance) {
+-                case DISTANCE_ERROR -> COMPONENT_LOGGER.error(text("*** Error obtaining version information! Cannot fetch version info ***"));
+-                case 0 -> apiResult.ifPresent(result -> {
+-                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
+-                    COMPONENT_LOGGER.warn(text("You are running the latest build for your Minecraft version (" + BUILD_INFO.minecraftVersionId() + ")"));
+-                    COMPONENT_LOGGER.warn(text("However, you are " + result.distance() + " release" + (result.distance() == 1 ? "" : "s") + " behind the latest stable release (" + result.latestVersion() + ")!"));
+-                    COMPONENT_LOGGER.warn(text("It is recommended that you update as soon as possible"));
+-                    COMPONENT_LOGGER.warn(text(DOWNLOAD_PAGE));
+-                    COMPONENT_LOGGER.warn(text("*************************************************************************************"));
+-                });
+-                case DISTANCE_UNKNOWN -> COMPONENT_LOGGER.warn(text("*** You are running an unknown version! Cannot fetch version info ***"));
+-                default -> {
+-                    if (apiResult.isPresent()) {
+-                        final MinecraftVersionFetcher result = apiResult.get();
+-                        COMPONENT_LOGGER.warn(text("*** You are running an outdated version of Minecraft, which is " + result.distance() + " release" + (result.distance() == 1 ? "" : "s") + " and " + distance + " build" + (distance == 1 ? "" : "s") + " behind!"));
+-                        COMPONENT_LOGGER.warn(text("*** Please update to the latest stable version on " + DOWNLOAD_PAGE + " ***"));
+-                    } else {
+-                        COMPONENT_LOGGER.info(text("*** Currently you are " + distance + " build" + (distance == 1 ? "" : "s") + " behind ***"));
+-                        COMPONENT_LOGGER.info(text("*** It is highly recommended to download the latest build from " + DOWNLOAD_PAGE + " ***"));
+-                    }
+-                }
+-            }
+-        }
+-    }
+-
+-    private static Component getUpdateStatusMessage() {
+-        int distance = DISTANCE_ERROR;
+-
+-        final OptionalInt buildNumber = PaperVersionFetcher.BUILD_INFO.buildNumber();
+-        if (buildNumber.isPresent()) {
+-            distance = fetchDistanceFromSiteApi(buildNumber.getAsInt());
+-        } else {
+-            final Optional<String> gitBranch = PaperVersionFetcher.BUILD_INFO.gitBranch();
+-            final Optional<String> gitCommit = PaperVersionFetcher.BUILD_INFO.gitCommit();
+-            if (gitBranch.isPresent() && gitCommit.isPresent()) {
+-                distance = fetchDistanceFromGitHub(gitBranch.get(), gitCommit.get());
+-            }
+-        }
+-
+-        return switch (distance) {
+-            case DISTANCE_ERROR -> text("Error obtaining version information", NamedTextColor.YELLOW);
+-            case 0 -> text("You are running the latest version", NamedTextColor.GREEN);
+-            case DISTANCE_UNKNOWN -> text("Unknown version", NamedTextColor.YELLOW);
+-            default -> text("You are " + distance + " version(s) behind", NamedTextColor.YELLOW)
+-                .append(Component.newline())
+-                .append(text("Download the new version at: ")
+-                    .append(text(DOWNLOAD_PAGE, NamedTextColor.GOLD)
+-                        .hoverEvent(text("Click to open", NamedTextColor.WHITE))
+-                        .clickEvent(ClickEvent.openUrl(DOWNLOAD_PAGE))));
+-        };
+-    }
+-
+-    private record MinecraftVersionFetcher(String latestVersion, int distance) {}
+-
+-    private static Optional<MinecraftVersionFetcher> fetchMinecraftVersionList() {
+-        final String currentVersion = PaperVersionFetcher.BUILD_INFO.minecraftVersionId();
+-
+-        try {
+-            final URL versionsUrl = URI.create("https://fill.papermc.io/v3/projects/paper").toURL();
+-            final HttpURLConnection connection = (HttpURLConnection) versionsUrl.openConnection();
+-            connection.setConnectTimeout(5000);
+-            connection.setReadTimeout(5000);
+-            connection.setRequestProperty("User-Agent", PaperVersionFetcher.USER_AGENT);
+-            connection.setRequestProperty("Accept", "application/json");
+-
+-            try (final BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+-                final JsonObject json = GSON.fromJson(reader, JsonObject.class);
+-                final JsonObject versions = json.getAsJsonObject("versions");
+-                final List<String> versionList = versions.keySet().stream()
+-                    .map(versions::getAsJsonArray)
+-                    .flatMap(array -> StreamSupport.stream(array.spliterator(), false))
+-                    .map(JsonElement::getAsString)
+-                    .toList();
+-
+-                for (final String latestVersion : versionList) {
+-                    if (latestVersion.equals(currentVersion)) {
+-                        return Optional.empty();
+-                    }
+-
+-                    try {
+-                        final URL buildsUrl = URI.create("https://fill.papermc.io/v3/projects/paper/versions/" + latestVersion + "/builds/latest").toURL();
+-                        final HttpURLConnection connection2 = (HttpURLConnection) buildsUrl.openConnection();
+-                        connection2.setConnectTimeout(5000);
+-                        connection2.setReadTimeout(5000);
+-                        connection2.setRequestProperty("User-Agent", PaperVersionFetcher.USER_AGENT);
+-                        connection2.setRequestProperty("Accept", "application/json");
+-
+-                        try (final BufferedReader buildReader = new BufferedReader(new InputStreamReader(connection2.getInputStream(), StandardCharsets.UTF_8))) {
+-                            final JsonObject buildJson = GSON.fromJson(buildReader, JsonObject.class);
+-                            if ("STABLE".equals(buildJson.get("channel").getAsString())) {
+-                                final int currentIndex = versionList.indexOf(currentVersion);
+-                                final int latestIndex = versionList.indexOf(latestVersion);
+-                                final int distance = currentIndex - latestIndex;
+-                                if (distance < 0) {
+-                                    // Avoid logging warnings for early unpublished snapshot builds
+-                                    return Optional.empty();
+-                                }
+-
+-                                return Optional.of(new MinecraftVersionFetcher(latestVersion, distance));
+-                            }
+-                        } catch (final JsonSyntaxException ex) {
+-                            LOGGER.error("Error parsing json from Paper's downloads API", ex);
+-                        }
+-                    } catch (final IOException e) {
+-                        LOGGER.error("Error while parsing latest build", e);
+-                    }
+-                }
+-            } catch (final JsonSyntaxException ex) {
+-                LOGGER.error("Error parsing json from Paper's downloads API", ex);
+-            }
+-        } catch (final IOException e) {
+-            LOGGER.error("Error while parsing version list", e);
+-        }
+-        return Optional.empty();
+-    }
+-
+-    private static int fetchDistanceFromSiteApi(final int jenkinsBuild) {
+-        try {
+-            final URL buildsUrl = URI.create("https://fill.papermc.io/v3/projects/paper/versions/" + PaperVersionFetcher.BUILD_INFO.minecraftVersionId() + "/builds").toURL();
+-            final HttpURLConnection connection = (HttpURLConnection) buildsUrl.openConnection();
+-            connection.setConnectTimeout(5000);
+-            connection.setReadTimeout(5000);
+-            connection.setRequestProperty("User-Agent", PaperVersionFetcher.USER_AGENT);
+-            connection.setRequestProperty("Accept", "application/json");
+-            try (final BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+-                final JsonArray builds = GSON.fromJson(reader, JsonArray.class);
+-                final int latest = StreamSupport.stream(builds.spliterator(), false)
+-                    .mapToInt(build -> build.getAsJsonObject().get("id").getAsInt())
+-                    .max()
+-                    .orElseThrow();
+-                return Math.max(latest - jenkinsBuild, 0);
+-            } catch (final JsonSyntaxException ex) {
+-                LOGGER.error("Error parsing json from Paper's downloads API", ex);
+-                return DISTANCE_ERROR;
+-            }
+-        } catch (final IOException e) {
+-            LOGGER.error("Error while parsing version", e);
+-            return DISTANCE_ERROR;
+-        }
+-    }
+-
+-    // Contributed by Techcable <Techcable@outlook.com> in GH-65
+-    private static int fetchDistanceFromGitHub(final String branch, final String hash) {
+-        try {
+-            final HttpURLConnection connection = (HttpURLConnection) URI.create("https://api.github.com/repos/%s/compare/%s...%s".formatted(PaperVersionFetcher.REPOSITORY, branch, hash)).toURL().openConnection();
+-            connection.setConnectTimeout(5000);
+-            connection.setReadTimeout(5000);
+-            connection.setRequestProperty("User-Agent", PaperVersionFetcher.USER_AGENT);
+-            connection.connect();
+-            if (connection.getResponseCode() == HttpURLConnection.HTTP_NOT_FOUND) return DISTANCE_UNKNOWN; // Unknown commit
+-            try (final BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+-                final JsonObject obj = GSON.fromJson(reader, JsonObject.class);
+-                final String status = obj.get("status").getAsString();
+-                return switch (status) {
+-                    case "identical" -> 0;
+-                    case "behind" -> obj.get("behind_by").getAsInt();
+-                    default -> DISTANCE_ERROR;
+-                };
+-            } catch (final JsonSyntaxException | NumberFormatException e) {
+-                LOGGER.error("Error parsing json from GitHub's API", e);
+-                return DISTANCE_ERROR;
+-            }
+-        } catch (final IOException e) {
+-            LOGGER.error("Error while parsing version", e);
+-            return DISTANCE_ERROR;
+-        }
++        return history != null ? Component.textOfChildren(message, Component.newline(), history) : message;
+     }
+ 
+     private @Nullable Component getHistory() {
+diff --git a/src/test/java/dev/lcsxnmc/LcsXnmcVersionFetcherTest.java b/src/test/java/dev/lcsxnmc/LcsXnmcVersionFetcherTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..219acb67efcb11065b4553e8b3140514e0ea74c7
+--- /dev/null
++++ b/src/test/java/dev/lcsxnmc/LcsXnmcVersionFetcherTest.java
+@@ -0,0 +1,64 @@
++package dev.lcsxnmc;
++
++import com.destroystokyo.paper.PaperVersionFetcher;
++import com.destroystokyo.paper.VersionHistoryManager;
++import net.kyori.adventure.text.Component;
++import net.kyori.adventure.text.event.ClickEvent;
++import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++@Normal
++class LcsXnmcVersionFetcherTest {
++
++    @Test
++    void reportsOfflineStatusWithProjectLink() {
++        final Component message = new PaperVersionFetcher().getVersionMessage();
++        final String text = PlainTextComponentSerializer.plainText().serialize(message);
++        assertTrue(text.contains("Automatic update checking is disabled for LcsXNMC."));
++        assertTrue(text.contains("https://github.com/MC-xiaonan/LcsXNMC/releases"));
++        assertFalse(text.contains("papermc.io"));
++        assertFalse(text.contains("latest version"));
++        assertFalse(text.contains("Unknown version"));
++        assertTrue(hasReleaseLink(message));
++    }
++
++    @Test
++    void retainsLocalVersionHistory() {
++        final VersionHistoryManager.VersionData data = VersionHistoryManager.INSTANCE.getVersionData();
++        assertNotNull(data);
++        final String previous = data.getOldVersion();
++        try {
++            data.setOldVersion("LcsXNMC-test-previous");
++            final String text = PlainTextComponentSerializer.plainText().serialize(new PaperVersionFetcher().getVersionMessage());
++            assertTrue(text.contains("Previous version: LcsXNMC-test-previous"));
++        } finally {
++            data.setOldVersion(previous);
++        }
++    }
++
++    @Test
++    void omitsHistoryWhenThereIsNoPreviousVersion() {
++        final VersionHistoryManager.VersionData data = VersionHistoryManager.INSTANCE.getVersionData();
++        assertNotNull(data);
++        final String previous = data.getOldVersion();
++        try {
++            data.setOldVersion(null);
++            final String text = PlainTextComponentSerializer.plainText().serialize(new PaperVersionFetcher().getVersionMessage());
++            assertFalse(text.contains("Previous version:"));
++        } finally {
++            data.setOldVersion(previous);
++        }
++    }
++
++    private static boolean hasReleaseLink(final Component component) {
++        if (ClickEvent.openUrl("https://github.com/MC-xiaonan/LcsXNMC/releases").equals(component.clickEvent())) {
++            return true;
++        }
++        return component.children().stream().anyMatch(LcsXnmcVersionFetcherTest::hasReleaseLink);
++    }
++}
+diff --git a/src/test/java/dev/lcsxnmc/MinecraftServerGuiTest.java b/src/test/java/dev/lcsxnmc/MinecraftServerGuiTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..253b69e28b475da9913e9ef0a5e1f9ee615a104c
+--- /dev/null
++++ b/src/test/java/dev/lcsxnmc/MinecraftServerGuiTest.java
+@@ -0,0 +1,151 @@
++package dev.lcsxnmc;
++
++import java.awt.BorderLayout;
++import java.awt.Component;
++import java.awt.Container;
++import java.awt.event.ActionEvent;
++import java.lang.reflect.Constructor;
++import java.lang.reflect.Field;
++import java.util.ArrayList;
++import java.util.List;
++import javax.swing.JLabel;
++import javax.swing.SwingUtilities;
++import javax.swing.Timer;
++import net.minecraft.server.dedicated.DedicatedPlayerList;
++import net.minecraft.server.dedicated.DedicatedServer;
++import net.minecraft.server.gui.MinecraftServerGui;
++import org.bukkit.support.environment.Normal;
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++@Normal
++class MinecraftServerGuiTest {
++
++    @Test
++    void statusBarSurvivesStartupAndTracksPlayers() throws Exception {
++        SwingUtilities.invokeAndWait(() -> {
++            final DedicatedServer server = mockServer();
++            when(server.getPlayerCount()).thenCallRealMethod();
++            final MinecraftServerGui gui = createGui(server);
++            try {
++                final BorderLayout layout = (BorderLayout) gui.getLayout();
++                for (final String region : List.of(BorderLayout.NORTH, BorderLayout.CENTER, BorderLayout.WEST)) {
++                    assertNotNull(layout.getLayoutComponent(region));
++                }
++                final Component statusBar = layout.getLayoutComponent(BorderLayout.SOUTH);
++                assertNotNull(statusBar, "The GUI constructor must not swallow a failed status bar build");
++                final JLabel playersLabel = labels((Container) statusBar).stream()
++                    .filter(label -> label.getText().startsWith("Players:"))
++                    .findFirst().orElseThrow();
++                final Timer timer = statusTimer(gui);
++                timer.start();
++                assertTrue(timer.isRunning());
++
++                assertEquals("Players: starting...", playersLabel.getText());
++                refresh(timer);
++                refresh(timer);
++                assertEquals("Players: starting...", playersLabel.getText());
++
++                final DedicatedPlayerList players = mock(DedicatedPlayerList.class);
++                when(server.getPlayerList()).thenReturn(players);
++                when(players.getPlayerCount()).thenReturn(0);
++                refresh(timer);
++                assertEquals("Players: 0/20", playersLabel.getText());
++
++                when(players.getPlayerCount()).thenReturn(7);
++                when(server.getMaxPlayers()).thenReturn(40);
++                refresh(timer);
++                assertEquals("Players: 7/40", playersLabel.getText());
++                verify(server, never()).getPlayerCount();
++            } finally {
++                gui.close();
++            }
++            assertFalse(statusTimer(gui).isRunning());
++        });
++    }
++
++    @Test
++    void statusBarSupportsAnAlreadyInitializedServer() throws Exception {
++        SwingUtilities.invokeAndWait(() -> {
++            final DedicatedServer server = mockServer();
++            final DedicatedPlayerList players = mock(DedicatedPlayerList.class);
++            when(server.getPlayerList()).thenReturn(players);
++            when(players.getPlayerCount()).thenReturn(3);
++            final MinecraftServerGui gui = createGui(server);
++            try {
++                final Component statusBar = ((BorderLayout) gui.getLayout()).getLayoutComponent(BorderLayout.SOUTH);
++                assertNotNull(statusBar);
++                assertTrue(labels((Container) statusBar).stream().anyMatch(label -> label.getText().equals("Players: 3/20")));
++            } finally {
++                gui.close();
++            }
++        });
++    }
++
++    @Test
++    void onboardingUsesLcsXnmcProject() throws Exception {
++        SwingUtilities.invokeAndWait(() -> {
++            final MinecraftServerGui gui = createGui(mockServer());
++            try {
++                final Component onboarding = ((BorderLayout) gui.getLayout()).getLayoutComponent(BorderLayout.NORTH);
++                assertNotNull(onboarding);
++                final List<String> text = labels((Container) onboarding).stream().map(JLabel::getText).toList();
++                assertTrue(text.stream().anyMatch(value -> value.contains("https://github.com/MC-xiaonan/LcsXNMC")));
++                assertFalse(text.stream().anyMatch(value -> value.contains("papermc.io")));
++            } finally {
++                gui.close();
++            }
++        });
++    }
++
++    private static DedicatedServer mockServer() {
++        final DedicatedServer server = mock(DedicatedServer.class);
++        when(server.getTPS()).thenReturn(new double[] {20.0, 20.0, 20.0});
++        when(server.getMaxPlayers()).thenReturn(20);
++        return server;
++    }
++
++    private static MinecraftServerGui createGui(final DedicatedServer server) {
++        return assertDoesNotThrow(() -> {
++            final Constructor<MinecraftServerGui> constructor = MinecraftServerGui.class.getDeclaredConstructor(DedicatedServer.class);
++            constructor.setAccessible(true);
++            return constructor.newInstance(server);
++        });
++    }
++
++    private static Timer statusTimer(final MinecraftServerGui gui) {
++        return assertDoesNotThrow(() -> {
++            final Field field = MinecraftServerGui.class.getDeclaredField("statusBarTimer");
++            field.setAccessible(true);
++            return (Timer) field.get(gui);
++        });
++    }
++
++    private static void refresh(final Timer timer) {
++        final ActionEvent event = new ActionEvent(timer, ActionEvent.ACTION_PERFORMED, "test");
++        for (final var listener : timer.getActionListeners()) {
++            listener.actionPerformed(event);
++        }
++    }
++
++    private static List<JLabel> labels(final Container container) {
++        final List<JLabel> labels = new ArrayList<>();
++        for (final Component child : container.getComponents()) {
++            if (child instanceof JLabel label) {
++                labels.add(label);
++            } else if (child instanceof Container nested) {
++                labels.addAll(labels(nested));
++            }
++        }
++        return labels;
++    }
++}
